@@ -34,6 +34,10 @@ export interface TrackSample {
   ny: number;
   /** Curvature 1/r (always >= 0). */
   curvature: number;
+  /** Signed curvature: same magnitude as `curvature`, sign encodes turn
+   *  direction. With (nx,ny) pointing left of travel, a positive value bends
+   *  the track toward the left (the inside is on the +normal side). */
+  signedCurvature: number;
   /** Relative speed shape in [vMin, vMax], filled by the speed profile. */
   relSpeed: number;
 }
@@ -136,7 +140,9 @@ export class Track {
       const ddx = next.x - 2 * cur.x + prev.x;
       const ddy = next.y - 2 * cur.y + prev.y;
       const speed = Math.hypot(dx, dy) || 1e-6;
-      const curvature = Math.abs(dx * ddy - dy * ddx) / (speed * speed * speed);
+      const cross = dx * ddy - dy * ddx;
+      const curvature = Math.abs(cross) / (speed * speed * speed);
+      const signedCurvature = cross / (speed * speed * speed);
       if (i > 0) dist += Math.hypot(cur.x - pts[i - 1].x, cur.y - pts[i - 1].y);
       samples.push({
         x: cur.x,
@@ -146,6 +152,7 @@ export class Track {
         nx: -dy / speed,
         ny: dx / speed,
         curvature: Number.isFinite(curvature) ? curvature : 0,
+        signedCurvature: Number.isFinite(signedCurvature) ? signedCurvature : 0,
         relSpeed: 0,
       });
     }

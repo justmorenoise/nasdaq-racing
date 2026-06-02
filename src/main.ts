@@ -1,7 +1,9 @@
 import "./style.css";
 import { Application, Container } from "pixi.js";
 import { buildTrack, DEFAULT_TRACK_ID, TRACKS } from "./track/tracks";
+import { computeLayout } from "./track/corners";
 import { TrackView } from "./render/TrackView";
+import { Scenery } from "./render/Scenery";
 import { CarView } from "./render/CarView";
 import { Camera } from "./render/Camera";
 import { Minimap } from "./render/Minimap";
@@ -43,10 +45,15 @@ async function boot() {
   app.stage.addChild(world);
 
   const track = buildTrack(trackId);
-  world.addChild(new TrackView(track).container);
+  const layout = computeLayout(track);
+  world.addChild(new TrackView(track, layout).container);
+  world.addChild(new Scenery(track, layout).container);
 
   const carLayer = new Container();
   world.addChild(carLayer);
+  // Labels render above all car bodies so names are never occluded in a pack.
+  const labelLayer = new Container();
+  world.addChild(labelLayer);
 
   const model = new RaceModel(track, DEFAULT_SYMBOLS);
   const camera = new Camera(world, track, model, app.screen);
@@ -55,7 +62,7 @@ async function boot() {
   const syncCarViews = () => {
     for (const [sym, car] of model.cars) {
       if (carViews.has(sym)) continue;
-      const view = new CarView(car);
+      const view = new CarView(car, labelLayer);
       view.root.eventMode = "static";
       view.root.cursor = "pointer";
       view.root.on("pointertap", () => camera.toggleFollow(sym));

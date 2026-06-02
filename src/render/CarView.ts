@@ -23,7 +23,10 @@ export class CarView {
   private label: Text;
   private isLeader = false;
 
-  constructor(private car: Car) {
+  constructor(
+    private car: Car,
+    labelLayer: Container,
+  ) {
     this.aura.circle(0, 0, CAR_LEN * 0.6).fill({ color: car.color, alpha: 1 });
     this.aura.alpha = 0;
     this.root.addChild(this.aura);
@@ -65,7 +68,9 @@ export class CarView {
       },
     });
     this.label.anchor.set(0.5, 1);
-    this.root.addChild(this.label);
+    // Labels live in a dedicated layer above all cars so a car body never
+    // occludes another car's name; positioned in world coords each frame.
+    labelLayer.addChild(this.label);
   }
 
   /**
@@ -95,11 +100,12 @@ export class CarView {
     this.label.visible = showLabel;
     if (this.label.visible) {
       this.label.scale.set(labelScale);
-      this.label.position.set(0, -14 * labelScale - CAR_W);
+      this.label.position.set(pose.x, pose.y - 14 * labelScale - CAR_W);
     }
   }
 
   destroy() {
+    this.label.destroy();
     this.root.destroy({ children: true });
   }
 }
