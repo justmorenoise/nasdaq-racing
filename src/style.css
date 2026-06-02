@@ -68,6 +68,39 @@ canvas {
   font-weight: 700;
 }
 
+/* Collapsible leaderboard header */
+.lb-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  font-weight: 700;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.lb-caret {
+  width: 0;
+  height: 0;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top: 6px solid var(--text-dim);
+  transition: transform 0.15s ease;
+}
+.leaderboard.collapsed .lb-caret {
+  transform: rotate(-90deg);
+}
+.leaderboard.collapsed .list {
+  display: none;
+}
+.leaderboard.collapsed {
+  height: auto;
+}
+
 /* Controls bar */
 .controls {
   position: absolute;

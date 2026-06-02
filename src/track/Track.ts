@@ -18,6 +18,8 @@ export interface TrackDef {
   svgPath?: string;
   /** Start/finish marker location in source (pre-scale) coords, if known. */
   startMarker?: [number, number];
+  /** Travel direction: clockwise or counter-clockwise (as seen on screen). */
+  verso?: "cw" | "ccw";
 }
 
 export interface TrackSample {
@@ -49,11 +51,31 @@ export const SVG_SCALE = 3;
 const SVG_SAMPLES = 520;
 const CR_SUBDIV = 22;
 
-/** Build the dense centerline polyline a track definition implies. */
+/** Signed polygon area (shoelace). In screen coords (y down), > 0 == clockwise. */
+function signedArea(pts: Pt[]): number {
+  let a = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const j = (i + 1) % pts.length;
+    a += pts[i].x * pts[j].y - pts[j].x * pts[i].y;
+  }
+  return a / 2;
+}
+
+/**
+ * Build the dense centerline polyline a track definition implies, oriented so
+ * that increasing arc length travels in the requested direction (`verso`).
+ */
 export function buildCenterline(def: TrackDef): Pt[] {
-  if (def.svgPath) return sampleSvgPath(def.svgPath, SVG_SAMPLES, SVG_SCALE);
-  if (def.points) return catmullRomPolyline(def.points, CR_SUBDIV);
-  throw new Error(`Track ${def.id} has neither points nor svgPath`);
+  let pts: Pt[];
+  if (def.svgPath) pts = sampleSvgPath(def.svgPath, SVG_SAMPLES, SVG_SCALE);
+  else if (def.points) pts = catmullRomPolyline(def.points, CR_SUBDIV);
+  else throw new Error(`Track ${def.id} has neither points nor svgPath`);
+
+  if (def.verso) {
+    const winding = signedArea(pts) > 0 ? "cw" : "ccw";
+    if (winding !== def.verso) pts.reverse();
+  }
+  return pts;
 }
 
 export class Track {

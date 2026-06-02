@@ -9,6 +9,8 @@ export class Controls {
     onFullView: () => void;
     onToggleSelector: () => void;
     onToggleDirector: () => void;
+    onToggleLabels: (on: boolean) => void;
+    labelsOn: boolean;
     tracks: { id: string; name: string }[];
     currentTrack: string;
     onTrackChange: (id: string) => void;
@@ -40,11 +42,22 @@ export class Controls {
     }
     trackSel.addEventListener("change", () => opts.onTrackChange(trackSel.value));
 
+    const labels = document.createElement("button");
+    labels.className = "btn" + (opts.labelsOn ? " active" : "");
+    const labelText = () => (opts.labelsOn ? "🏷 Etichette ON" : "🏷 Etichette");
+    labels.textContent = labelText();
+    labels.addEventListener("click", () => {
+      opts.labelsOn = !opts.labelsOn;
+      labels.classList.toggle("active", opts.labelsOn);
+      labels.textContent = labelText();
+      opts.onToggleLabels(opts.labelsOn);
+    });
+
     const sel = document.createElement("button");
     sel.className = "btn";
     sel.textContent = "☰ Titoli";
     sel.addEventListener("click", opts.onToggleSelector);
 
-    this.el.append(full, director, trackSel, sel);
+    this.el.append(full, director, trackSel, labels, sel);
   }
 }

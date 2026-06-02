@@ -7,6 +7,8 @@ import { Camera } from "./render/Camera";
 import { Minimap } from "./render/Minimap";
 import { RaceModel } from "./sim/RaceModel";
 import { SimulatedFeed } from "./feed/SimulatedFeed";
+import { SupabaseFeed } from "./feed/SupabaseFeed";
+import type { PriceFeed } from "./feed/PriceFeed";
 import { DEFAULT_SYMBOLS } from "./data/nasdaq100";
 import { Leaderboard } from "./ui/Leaderboard";
 import { Controls } from "./ui/Controls";
@@ -72,7 +74,16 @@ async function boot() {
   app.stage.addChild(minimap.container);
   minimap.layout(app.screen.width);
 
-  const feed = new SimulatedFeed();
+  // Feed selection: real data (Supabase) is the default when configured;
+  // ?feed=demo forces the offline simulated feed. (Falls back to simulated if
+  // Supabase env vars are missing.)
+  const supaUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
+  const supaKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
+  const wantDemo = params.get("feed") === "demo";
+  const useSupabase = !wantDemo && !!supaUrl && !!supaKey;
+  const feed: PriceFeed = useSupabase
+    ? new SupabaseFeed(supaUrl!, supaKey!)
+    : new SimulatedFeed();
   feed.onUpdate((updates) => model.applyUpdates(updates));
   feed.start(DEFAULT_SYMBOLS);
 
@@ -96,6 +107,7 @@ async function boot() {
     syncCarViews();
   });
   let directorOn = false;
+  let labelsOn = true;
   const controls = new Controls({
     onFullView: () => {
       directorOn = false;
@@ -105,6 +117,10 @@ async function boot() {
     onToggleDirector: () => {
       directorOn = !directorOn;
     },
+    onToggleLabels: (on) => {
+      labelsOn = on;
+    },
+    labelsOn,
     tracks: TRACKS.map((t) => ({ id: t.id, name: t.name })),
     currentTrack: trackId,
     onTrackChange: (id) => {
@@ -139,6 +155,7 @@ async function boot() {
 
   let uiAccum = 0;
   let directorAccum = 0;
+  let battleSymbols = new Set<string>();
   const frame = (dt: number) => {
     const clk = clock.sample();
     if (clk.state === "running") model.update(dt * timeScale);
@@ -158,19 +175,26 @@ async function boot() {
     camera.update(dt);
 
     const labelScale = 1 / camera.scale;
-    const showLabels = camera.scale > 0.55;
-    const leaderSym = model.order[0]?.symbol;
+    // P1 = best performer by % (top of the standings).
+    let leaderSym: string | undefined;
+    let bestPct = -Infinity;
+    for (const car of model.cars.values()) {
+      if (car.changePct > bestPct) {
+        bestPct = car.changePct;
+        leaderSym = car.symbol;
+      }
+    }
+    // Declutter: in full view label only the leader + cars in a battle; in
+    // chase view (few cars on screen) label everyone.
+    const inChase = camera.currentMode === "chase";
     for (const [sym, car] of model.cars) {
       // Boost glow decays in real time (independent of sim time-scale).
       if (car.boost > 0) car.boost = Math.max(0, car.boost - dt * 1.1);
+      const showLabel =
+        labelsOn && (inChase || sym === leaderSym || battleSymbols.has(sym));
       carViews
         .get(sym)
-        ?.update(
-          model.poseForCar(car),
-          labelScale,
-          showLabels,
-          sym === leaderSym,
-        );
+        ?.update(model.poseForCar(car), labelScale, showLabel, sym === leaderSym);
     }
     minimap.update(camera.followedSymbol);
 
@@ -178,10 +202,15 @@ async function boot() {
     uiAccum += dt;
     if (uiAccum >= 0.15) {
       uiAccum = 0;
-      // Standings = race order (by track progress), so the list matches the
-      // cars' on-track positions. A stock that rises laps faster and overtakes.
-      leaderboard.update(model.order, camera.followedSymbol);
-      battleBar.update(detectBattles(model.cars.values(), track));
+      // Standings ordered by best % of the day (best on top). The leader-relative
+      // pace model makes on-track order converge to this, with live overtakes.
+      const byPct = [...model.cars.values()].sort(
+        (a, b) => b.changePct - a.changePct,
+      );
+      leaderboard.update(byPct, camera.followedSymbol);
+      const battles = detectBattles(model.cars.values(), track);
+      battleBar.update(battles);
+      battleSymbols = new Set(battles.flatMap((b) => b.symbols));
       raceHud.setStatus(clk);
 
       // Broadcast gap readout for the chased car.

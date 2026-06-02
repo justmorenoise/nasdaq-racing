@@ -28,7 +28,7 @@ export class SimulatedFeed implements PriceFeed {
   private states = new Map<string, SimState>();
   private listeners = new Set<PriceListener>();
   private timer: number | null = null;
-  private readonly tickMs = 450;
+  private readonly tickMs = 1000;
 
   start(symbols: string[]): void {
     const wanted = new Set(symbols);
@@ -39,12 +39,15 @@ export class SimulatedFeed implements PriceFeed {
     for (const symbol of symbols) {
       if (this.states.has(symbol)) continue;
       const def = getStockDef(symbol);
+      const bias = gaussian() * 1.6; // the day's trend (spreads the field)
       this.states.set(symbol, {
         basePrice: def?.basePrice ?? 100,
-        changePct: gaussian() * 0.3,
-        bias: gaussian() * 0.8,
-        sigma: 0.4 + Math.random() * 0.5,
-        theta: 0.04 + Math.random() * 0.05,
+        changePct: bias + gaussian() * 0.4,
+        bias,
+        // Gentle volatility so the standings evolve gradually (like intraday data),
+        // letting the on-track positions track the leaderboard smoothly.
+        sigma: 0.05 + Math.random() * 0.06,
+        theta: 0.02 + Math.random() * 0.03,
       });
     }
     if (this.timer === null) {
@@ -76,8 +79,8 @@ export class SimulatedFeed implements PriceFeed {
     const dt = this.tickMs / 1000;
     for (const st of this.states.values()) {
       // Drift the bias on a slow random walk (the evolving daily trend).
-      st.bias += gaussian() * 0.05 * Math.sqrt(dt);
-      st.bias = Math.max(-3, Math.min(3, st.bias));
+      st.bias += gaussian() * 0.02 * Math.sqrt(dt);
+      st.bias = Math.max(-6, Math.min(6, st.bias));
       // Ornstein-Uhlenbeck step on the change percent.
       st.changePct +=
         st.theta * (st.bias - st.changePct) * dt +

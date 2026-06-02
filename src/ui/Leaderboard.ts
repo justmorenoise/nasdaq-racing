@@ -11,6 +11,17 @@ function fmtSigned(n: number, digits = 2): string {
   return (n >= 0 ? "+" : "") + n.toFixed(digits);
 }
 
+function money(n: number): string {
+  return "$" + n.toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
+function signedMoney(n: number): string {
+  return (n >= 0 ? "+" : "−") + money(Math.abs(n));
+}
+
 /**
  * Live standings panel: one row per followed stock with price, numeric delta and
  * percent delta, re-sorted by percent change (best on top). Clicking a row asks
@@ -23,10 +34,19 @@ export class Leaderboard {
 
   constructor(private onSelect: (symbol: string) => void) {
     this.el.className = "panel leaderboard";
-    const title = document.createElement("div");
-    title.className = "panel-title";
-    title.textContent = "CLASSIFICA";
+    const title = document.createElement("button");
+    title.className = "panel-title lb-toggle";
+    const caret = document.createElement("span");
+    caret.className = "lb-caret";
+    const label = document.createElement("span");
+    label.textContent = "CLASSIFICA";
+    title.append(label, caret);
+    title.addEventListener("click", () =>
+      this.el.classList.toggle("collapsed"),
+    );
     this.el.append(title, this.list);
+    // Start collapsed on narrow screens to keep the track visible.
+    if (window.innerWidth < 640) this.el.classList.add("collapsed");
   }
 
   private ensureRow(car: Car): Row {
@@ -80,7 +100,7 @@ export class Leaderboard {
 
       row.posEl.textContent = String(i + 1);
       const delta = car.price - car.basePrice;
-      row.priceEl.textContent = `${car.price.toFixed(2)}  ${fmtSigned(delta)}`;
+      row.priceEl.textContent = `${money(car.price)}  ${signedMoney(delta)}`;
       row.deltaEl.textContent = `${fmtSigned(car.changePct)}%`;
       const cls = car.changePct >= 0 ? "up" : "down";
       row.deltaEl.className = `lb-delta ${cls}`;

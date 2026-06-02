@@ -12,7 +12,12 @@ const svgRaw = import.meta.glob("/circuits/*.svg", {
   eager: true,
 }) as Record<string, string>;
 
-const lapTimes = lapData as { circuito: string; tempo_secondi: number }[];
+const lapTimes = lapData as {
+  circuito: string;
+  tempo_secondi: number;
+  file?: string;
+  verso?: "cw" | "ccw";
+}[];
 
 function allPaths(svg: string): string[] {
   return [...svg.matchAll(/<path\b[^>]*\bd="([^"]+)"/g)].map((m) => m[1]);
@@ -33,9 +38,13 @@ function extractStartMarker(svg: string): [number, number] | undefined {
   return m ? [parseFloat(m[1]), parseFloat(m[2])] : undefined;
 }
 
-function lapTimeFor(base: string): { name: string; time: number } | null {
+function lapTimeFor(
+  base: string,
+): { name: string; time: number; verso?: "cw" | "ccw" } | null {
   const entry = lapTimes.find((c) => c.circuito.toLowerCase() === base);
-  return entry ? { name: entry.circuito, time: entry.tempo_secondi } : null;
+  return entry
+    ? { name: entry.circuito, time: entry.tempo_secondi, verso: entry.verso }
+    : null;
 }
 
 // Desired display order (by file slug base).
@@ -62,6 +71,7 @@ const svgTracks: TrackDef[] = Object.entries(svgRaw)
       width: 54,
       svgPath: extractCenterlinePath(raw),
       startMarker: extractStartMarker(raw),
+      verso: lap.verso,
     };
   })
   .filter((t): t is TrackDef => t !== null)
@@ -87,6 +97,7 @@ const libertyOval: TrackDef = {
     [800, 138],
     [1252, 225],
   ],
+  verso: "cw",
 };
 
 export const TRACKS: TrackDef[] = [...svgTracks, libertyOval];

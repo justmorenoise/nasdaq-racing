@@ -6,14 +6,22 @@ export const CONFIG = {
   /** Daily % change is clamped to this band before mapping to lap time. */
   changePctClamp: 8,
 
-  /**
-   * Car speed eases toward its target instead of snapping (the "elastic" feel).
-   * Larger = snappier. Units: 1/seconds (exponential smoothing rate).
-   */
-  speedEaseRate: 0.8,
-
   /** Lateral offset easing for overtakes (1/seconds). */
   laneEaseRate: 2.5,
+
+  /**
+   * Standings-driven positioning: the on-track order reflects the % leaderboard.
+   * Each car targets a slot behind the standings leader whose gap grows with the
+   * cumulative % differences; a proportional controller steers it there smoothly
+   * (animating overtakes) while the corner speed profile still applies.
+   */
+  pace: {
+    baseGapFrac: 0.02, // lap-fraction of spacing between adjacent cars (readability)
+    gapPerPctFrac: 0.03, // extra lap-fraction of spacing per 1% of standings gap
+    gain: 6, // controller gain toward the target slot (higher = snappier)
+    minMul: 0.3, // clamp on the pace multiplier (slowest)
+    maxMul: 2.4, // clamp on the pace multiplier (fastest, for catching up)
+  },
 
   /**
    * Track speed-profile shape (scale-invariant relative units, vMax = top speed).
@@ -34,7 +42,7 @@ export const CONFIG = {
   battle: {
     /** 'perf' = within performance %; 'track' = on-track proximity. */
     strategy: "perf" as "perf" | "track",
-    perfPctWindow: 1.0, // strategy A: max |Δ% - Δ%| within a group
+    perfPctWindow: 0.1, // strategy A: max |Δ% - Δ%| within a group
     trackGapFrac: 0.012, // strategy B: max gap as fraction of a lap
     maxGroupSize: 4,
   },

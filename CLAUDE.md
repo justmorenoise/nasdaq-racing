@@ -26,8 +26,10 @@ The `main.ts` game loop drives a single `app.ticker` that advances the sim by `d
 to draw. Keep these layers decoupled — the sim must never import from `render/` or `ui/`.
 
 - **`feed/`** — `PriceFeed` is the abstraction boundary: it emits `PriceUpdate {symbol, changePct, price, ts}`.
-  `SimulatedFeed` (mean-reverting random walk) is the v1 implementation. Phase 2 adds an `EtoroFeed` behind
-  the same interface; **no other layer should know where prices come from.**
+  `SupabaseFeed` is the **real-data** adapter (snapshot `select` + Realtime `postgres_changes` on the
+  `prices` table) and is the **default** when `VITE_SUPABASE_URL`/`VITE_SUPABASE_ANON_KEY` are set;
+  `?feed=demo` forces the offline `SimulatedFeed` (mean-reverting random walk). **No other layer knows
+  where prices come from.**
 - **`track/`** — A track is a closed centerline polyline → arc-length + per-sample tangent/normal/curvature
   (finite differences in `Track.buildSamples`). `speedProfile.ts` derives local speed from **curvature**
   (`v ∝ 1/√κ`, capped) with a forward/backward pass to bound accel/braking, normalized so a neutral lap ==
@@ -36,15 +38,21 @@ to draw. Keep these layers decoupled — the sim must never import from `render/
   `<path>` is the centerline, sampled via `getPointAtLength`, scaled ×3) with base lap times from
   `/circuits/circuits.json`, loaded in `tracks.ts` via `import.meta.glob`; plus a hand-made Catmull-Rom oval.
   Use `buildTrack(id)` to construct. SVG circuits use real names (Monza, Suzuka, …) from the JSON.
-- **`sim/`** — The model. Each `Car` holds `progress` (cumulative laps, float) integrated each frame.
-  `RaceModel` sets each car's target speed from `targetLapTime = baseLapTime * (1 - clamp(changePct)/100)`
-  and **eases current speed toward target** (time-constant smoothing) — this is the "elastic" feel; never
-  snap speed to the data. Race order = `progress`. `overtake.ts` handles cosmetic lateral lane changes
-  (queue → alongside → pass → return, reversible). `battles.ts` detects duels with **two selectable
-  strategies** (A: % performance within ~1%; B: on-track proximity) — both kept for comparison via flags in
-  `config.ts`. `RaceClock.ts` maps the US session (09:30–16:00 ET) to pre/running/finished, with a **dev
-  override** to accelerate/scrub time for testing outside market hours.
-- **`render/`** — Pixi. The whole game world lives in one container that `Camera.ts` translates/scales.
+- **`sim/`** — The model. **On-track order reflects the standings (by % change).** `RaceModel.update`
+  sorts cars by clamped `changePct`, then assigns each a `targetProgress` slot behind the standings leader:
+  `gap += L*(baseGapFrac + gapPerPctFrac*ΔPct)` (a readable base spacing + a bonus for the % gap, so tight
+  clusters look like nose-to-tail battles). A proportional controller nudges each car's pace toward its slot
+  (`adjust = clamp(1 + gain*posError/L)`) **while still using the corner speed profile** (`relSpeed`), so
+  cars brake in corners and overtakes animate smoothly when % change. The standings leader runs ~`baseLapTime`.
+  Cars snap into their slot on the first frame that has real data (`seeded`). Race order = `progress`, which
+  tracks the standings. `overtake.ts` adds cosmetic lateral lane changes; `battles.ts` detects duels (two
+  strategies in `config.ts`); `RaceClock.ts` maps the US session (09:30–16:00 ET) to pre/running/finished
+  with a dev time override. Tunables in `config.ts` → `pace`.
+- **`render/`** — Pixi. Cars are textured sprites from `/car/car.svg` (`carSprite.ts`): the `base` body
+  path is recolored to the stock's primary color and the `casco` (helmet) to `color2` if set, else a
+  stable per-symbol random color; textures are cached per color combo. `CarView` also has a boost aura, a
+  gold P1 ring, and an upright ticker label (global on/off toggle in `Controls`). The whole game world
+  lives in one container that `Camera.ts` translates/scales.
   Two camera modes with eased transitions: **Full** (fit whole track) and **Chase** (follow one car,
   zoom out on straights / in on corners based on current speed). `Minimap.ts`, `TrackView.ts`, `CarView.ts`.
 - **`ui/`** — DOM overlays above the canvas (easier to style than canvas text), inside `.ui-overlay`
@@ -61,10 +69,19 @@ to draw. Keep these layers decoupled — the sim must never import from `render/
 - TypeScript strict, ES modules, `.ts` extensions in imports allowed (bundler resolution).
 - `dt` is **seconds** (`app.ticker.deltaMS / 1000`). All motion/easing is dt-based, never per-frame constants.
 
-## Phase 2 (not in this repo yet)
+## Real-data backend (Supabase + Finnhub)
 
-Real eToro data needs a small **backend** (keys `x-api-key`/`x-user-key` are secret and rate-limited
-per-key): it holds one WebSocket subscription (`instrument:<id>`, pushes Bid/Ask/LastExecution) and fans
-out to browser clients. Daily % = `(lastExecution − previousClose) / previousClose`; previous close from the
-`history/closing-price` endpoint. Resolve ticker→instrumentId once via `market-data/search` and cache.
-The only front-end change should be a new `EtoroFeed` implementing `PriceFeed`.
+Implemented with **Supabase** (project ref `nikpcgoswyjylqrusunr`, `nasdaq-grand-prix`):
+- Table `public.prices (symbol pk, price, change_pct, ts)`, RLS public-read, in the `supabase_realtime`
+  publication (replica identity full).
+- Edge Function `update-prices` (Deno): reads the **`FINNHUB_API_KEY` secret**, calls Finnhub
+  `/quote?symbol=X` per symbol (uses `dp` for daily %, `c` for price), upserts `prices`. **Without the key
+  it writes a smooth simulated fallback** so the pipeline works for testing.
+- `pg_cron` job `update-prices-every-minute` invokes the function each minute via `pg_net` (Bearer = anon key).
+- The Finnhub key lives **only** as an Edge Function secret — never in the frontend. The browser uses the
+  public anon key. To go live: set the `FINNHUB_API_KEY` secret on the function (Dashboard → Edge Functions
+  → secrets), no code change needed.
+
+Cadence is ~1 min (cron); the sim eases between updates so motion stays smooth. For true sub-second data a
+separate always-on worker holding a Finnhub WebSocket could push to Realtime instead — not needed here.
+(The earlier eToro plan in `feed/` notes still applies as an alternative provider behind `PriceFeed`.)

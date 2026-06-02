@@ -90,8 +90,7 @@ export class Camera {
     this.targetCy = pose.y;
 
     const { vMin, vMax } = CONFIG.profile;
-    const rel = car.worldSpeed / Math.max(car.speedScalar, 1e-6);
-    const norm = Math.min(1, Math.max(0, (rel - vMin) / (vMax - vMin)));
+    const norm = Math.min(1, Math.max(0, (car.relSpeed - vMin) / (vMax - vMin)));
     const { chaseZoom, chaseZoomSpeedSpread } = CONFIG.camera;
     this.targetZoom = chaseZoom * (1 - chaseZoomSpeedSpread * norm);
   }
