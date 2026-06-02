@@ -1,0 +1,408 @@
+:root {
+  color-scheme: dark;
+  --bg: #0a0e14;
+  --panel: rgba(18, 24, 34, 0.82);
+  --panel-border: rgba(255, 255, 255, 0.08);
+  --text: #e7ecf3;
+  --text-dim: #8b97a8;
+  --pos: #2fd47a;
+  --neg: #ff5d5d;
+  --accent: #ffd23f;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica,
+    Arial, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body,
+#app {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+#app {
+  position: relative;
+}
+
+canvas {
+  display: block;
+}
+
+/* UI overlay container sits above the canvas, but lets clicks through except on widgets */
+.ui-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 10;
+}
+
+.ui-overlay > * {
+  pointer-events: auto;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 12px;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+}
+
+.panel-title {
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  color: var(--text-dim);
+  padding: 9px 12px 6px;
+  font-weight: 700;
+}
+
+/* Controls bar */
+.controls {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  display: flex;
+  gap: 8px;
+}
+
+.btn {
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 9px;
+  padding: 8px 12px;
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+.btn:hover {
+  border-color: rgba(255, 255, 255, 0.2);
+}
+.btn:active {
+  transform: translateY(1px);
+}
+.btn.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.btn.select {
+  -webkit-appearance: none;
+  appearance: none;
+  padding-right: 14px;
+}
+
+/* Chase-cam broadcast gap readout */
+.chase-info {
+  position: absolute;
+  bottom: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 12px;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  padding: 6px 12px;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  white-space: nowrap;
+}
+.chase-info.hidden {
+  display: none;
+}
+.chase-info b {
+  color: var(--accent);
+}
+
+/* Leaderboard */
+.leaderboard {
+  position: absolute;
+  top: 60px;
+  left: 14px;
+  width: 246px;
+  max-height: calc(100% - 76px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.leaderboard .list,
+.leaderboard > div:last-child {
+  overflow-y: auto;
+}
+
+.lb-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  padding: 6px 12px;
+  cursor: pointer;
+  border-left: 3px solid transparent;
+}
+.lb-row:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+.lb-row.followed {
+  background: rgba(255, 210, 63, 0.1);
+  border-left-color: var(--accent);
+}
+.lb-pos {
+  width: 16px;
+  font-size: 11px;
+  color: var(--text-dim);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  flex: none;
+}
+.lb-chip {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  background: var(--team);
+  flex: none;
+}
+.lb-main {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+.lb-sym {
+  font-weight: 700;
+  font-size: 13px;
+}
+.lb-price {
+  font-size: 11px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+.lb-delta {
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  flex: none;
+}
+.lb-delta.up {
+  color: var(--pos);
+}
+.lb-delta.down {
+  color: var(--neg);
+}
+
+/* Battle bar (bottom, grows upward) */
+.battle-bar {
+  position: absolute;
+  bottom: 50px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: center;
+  max-width: 74%;
+}
+.battle-chip {
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  color: #1a1206;
+  background: linear-gradient(180deg, #ffd23f, #f5a623);
+  border: 0;
+  border-radius: 999px;
+  padding: 7px 13px;
+  cursor: pointer;
+  box-shadow: 0 4px 16px rgba(245, 166, 35, 0.35);
+  animation: chip-in 0.2s ease-out;
+}
+.battle-chip:active {
+  transform: translateY(1px);
+}
+@keyframes chip-in {
+  from {
+    opacity: 0;
+    transform: scale(0.85);
+  }
+}
+
+/* Stock selector */
+.selector {
+  position: absolute;
+  top: 60px;
+  left: 270px;
+  width: 250px;
+  padding-bottom: 10px;
+}
+.selector.hidden {
+  display: none;
+}
+.selector-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 10px;
+  padding: 4px 12px;
+}
+.selector-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.selector-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+}
+
+/* Race status line (top-right, under the minimap) */
+.race-status {
+  position: absolute;
+  top: 146px;
+  right: 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 999px;
+  padding: 7px 14px;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  font-variant-numeric: tabular-nums;
+}
+.race-status .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+.race-status .dot.live {
+  background: var(--neg);
+  box-shadow: 0 0 0 0 rgba(255, 93, 93, 0.6);
+  animation: pulse 1.6s infinite;
+}
+.race-status .dot.pre {
+  background: var(--accent);
+}
+.race-status .dot.done {
+  background: var(--text-dim);
+}
+@keyframes pulse {
+  70% {
+    box-shadow: 0 0 0 7px rgba(255, 93, 93, 0);
+  }
+}
+
+/* Podium overlay */
+.podium {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(4, 7, 12, 0.55);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+}
+.podium.hidden {
+  display: none;
+}
+.podium-card {
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 16px;
+  padding: 18px 20px;
+  min-width: 320px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
+}
+.podium-title {
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: var(--accent);
+  margin-bottom: 12px;
+  text-align: center;
+}
+.podium-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  padding: 9px 6px;
+  cursor: pointer;
+  border-radius: 8px;
+}
+.podium-row:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+.podium-medal {
+  font-size: 18px;
+}
+.podium-chip {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+}
+.podium-sym {
+  font-weight: 800;
+  font-size: 16px;
+  flex: 1;
+  text-align: left;
+}
+.podium-laps {
+  font-size: 12px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+.podium-pct {
+  font-size: 13px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  min-width: 64px;
+  text-align: right;
+}
+.podium-pct.up {
+  color: var(--pos);
+}
+.podium-pct.down {
+  color: var(--neg);
+}
+
+@media (max-width: 640px) {
+  .leaderboard {
+    width: 180px;
+  }
+  .selector {
+    left: 14px;
+    top: 200px;
+  }
+}

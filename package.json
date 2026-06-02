@@ -1,0 +1,20 @@
+{
+  "name": "nasdaq-grand-prix",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Playful browser viewer: Nasdaq 100 stocks racing as F1 cars on a circuit (simulated-data prototype).",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "pixi.js": "^8.6.6"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.3",
+    "vite": "^6.0.7"
+  }
+}
