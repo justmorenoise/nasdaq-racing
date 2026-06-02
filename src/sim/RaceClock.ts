@@ -16,23 +16,34 @@ const REAL_TOTAL = CLOSE_SEC - OPEN_SEC; // 23400s
 
 /**
  * Maps wall-clock time to a race state. Default mode follows the real US market
- * session (09:30–16:00 ET, weekdays). A demo mode runs a compressed session of
- * fixed length from page load, so the product can be shown at any hour.
+ * session (09:30–16:00 ET, weekdays). A compressed `demoSeconds` session ends
+ * with a podium after a fixed length. `endless` mode (offline/demo data) keeps
+ * the race perpetually "running" so it can be shown at any hour without ever
+ * hitting the market close.
  */
 export class RaceClock {
   private startMs: number;
 
   constructor(
     private demoSeconds: number | null = null,
+    private endless: boolean = false,
     nowMs: number = Date.now(),
   ) {
     this.startMs = nowMs;
   }
 
   sample(nowMs: number = Date.now()): ClockSample {
+    if (this.endless) return this.sampleEndless(nowMs);
     return this.demoSeconds != null
       ? this.sampleDemo(nowMs)
       : this.sampleReal(nowMs);
+  }
+
+  /** Always running; the session timer simply loops over a normal race length. */
+  private sampleEndless(nowMs: number): ClockSample {
+    const total = REAL_TOTAL;
+    const elapsed = (((nowMs - this.startMs) / 1000) % total + total) % total;
+    return { state: "running", elapsed, total, fraction: elapsed / total };
   }
 
   private sampleDemo(nowMs: number): ClockSample {

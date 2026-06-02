@@ -51,34 +51,6 @@ function hexToRgba(hexColor: string, a: number): string {
   return `rgba(${r},${g},${b},${a})`;
 }
 
-/** Large, soft radial blobs (wrapped) for low-frequency tonal variation. */
-function softPatches(
-  ctx: CanvasRenderingContext2D,
-  size: number,
-  count: number,
-  r: [number, number],
-  colors: string[],
-  alpha: number,
-): void {
-  for (let i = 0; i < count; i++) {
-    const x = Math.random() * size;
-    const y = Math.random() * size;
-    const rad = r[0] + Math.random() * (r[1] - r[0]);
-    const color = colors[(Math.random() * colors.length) | 0];
-    for (const ox of [-size, 0, size]) {
-      for (const oy of [-size, 0, size]) {
-        const grad = ctx.createRadialGradient(x + ox, y + oy, 0, x + ox, y + oy, rad);
-        grad.addColorStop(0, hexToRgba(color, alpha));
-        grad.addColorStop(1, hexToRgba(color, 0));
-        ctx.fillStyle = grad;
-        ctx.beginPath();
-        ctx.arc(x + ox, y + oy, rad, 0, Math.PI * 2);
-        ctx.fill();
-      }
-    }
-  }
-}
-
 function makeTexture(
   size: number,
   draw: (ctx: CanvasRenderingContext2D) => void,
@@ -118,16 +90,51 @@ export function asphaltTexture(): Texture {
 }
 
 export function grassTexture(): Texture {
-  // 256px + large soft tonal patches so the (seamless) tile doesn't read as an
-  // obvious repeat: low-frequency mown/worn variation plus a fine blade speckle.
-  return cachedTexture("grass", 256, (ctx) => {
-    fillNoise(ctx, 256, "#2b5d33", [
-      { count: 760, r: [1.2, 3.0], color: "#23502b", alpha: 0.5 },
-      { count: 620, r: [1.0, 2.6], color: "#356f3c", alpha: 0.45 },
-      { count: 260, r: [0.8, 1.8], color: "#43874b", alpha: 0.4 },
-    ]);
-    softPatches(ctx, 256, 14, [40, 95], ["#21492a", "#326a39", "#2f6536", "#1f4527"], 0.22);
-  });
+  // High-frequency grass blades only. Tiled small, this reads as fine noise and
+  // its repeat is hard to spot; all the larger-scale tonal variation comes from
+  // a separate, NON-tiled overlay (grassVariationTexture) so nothing visibly
+  // repeats.
+  return cachedTexture("grass", 192, (ctx) =>
+    fillNoise(ctx, 192, "#2b5d33", [
+      { count: 720, r: [0.9, 2.4], color: "#23502b", alpha: 0.5 },
+      { count: 600, r: [0.8, 2.0], color: "#356f3c", alpha: 0.45 },
+      { count: 240, r: [0.6, 1.5], color: "#43874b", alpha: 0.4 },
+    ]),
+  );
+}
+
+/**
+ * A single large, NON-repeating tonal overlay sized to the whole grass area
+ * (drawn once, stretched over the bounds). Soft green blobs break up the
+ * tiled-blade texture so the grass never looks like an obvious repeat.
+ */
+export function grassVariationTexture(worldW: number, worldH: number): Texture {
+  const scale = 1024 / Math.max(worldW, worldH);
+  const cw = Math.max(4, Math.round(worldW * scale));
+  const ch = Math.max(4, Math.round(worldH * scale));
+  const c = document.createElement("canvas");
+  c.width = cw;
+  c.height = ch;
+  const ctx = c.getContext("2d")!;
+  const colors = ["#1f4527", "#21492a", "#346e3c", "#3c7e45", "#2a5e33", "#274f2e"];
+  const blobs = Math.round((cw * ch) / (160 * 160));
+  for (let i = 0; i < blobs; i++) {
+    const x = Math.random() * cw;
+    const y = Math.random() * ch;
+    const rad = (60 + Math.random() * 200) * scale;
+    const color = colors[(Math.random() * colors.length) | 0];
+    const alpha = 0.1 + Math.random() * 0.16;
+    const grad = ctx.createRadialGradient(x, y, 0, x, y, rad);
+    grad.addColorStop(0, hexToRgba(color, alpha));
+    grad.addColorStop(1, hexToRgba(color, 0));
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(x, y, rad, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  const tex = Texture.from(c);
+  tex.source.scaleMode = "linear";
+  return tex;
 }
 
 export function gravelTexture(): Texture {

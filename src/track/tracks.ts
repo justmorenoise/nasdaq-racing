@@ -19,22 +19,49 @@ const lapTimes = lapData as {
   verso?: "cw" | "ccw";
 }[];
 
-function allPaths(svg: string): string[] {
-  return [...svg.matchAll(/<path\b[^>]*\bd="([^"]+)"/g)].map((m) => m[1]);
+interface SvgPath {
+  id: string;
+  d: string;
+}
+
+function parsePaths(svg: string): SvgPath[] {
+  return [...svg.matchAll(/<path\b([^>]*?)\/?>/g)]
+    .map((m) => {
+      const tag = m[1];
+      const d = /\bd="([^"]+)"/.exec(tag)?.[1] ?? "";
+      const id = /\bid="([^"]+)"/.exec(tag)?.[1] ?? "";
+      return { id, d };
+    })
+    .filter((p) => p.d);
 }
 
 function extractCenterlinePath(svg: string): string {
-  // The first <path d="..."> in these files is the track centerline.
-  const paths = allPaths(svg);
+  // New format tags the centerline `id="centerline"`; older files put it first.
+  const paths = parsePaths(svg);
   if (paths.length === 0) throw new Error("No path found in circuit SVG");
-  return paths[0];
+  return paths.find((p) => p.id === "centerline")?.d ?? paths[0].d;
 }
 
-/** The 2nd path is the start/finish marker; return its first coordinate. */
+/**
+ * New format: an `id="track"` path whose two closed subpaths are the track's
+ * outer and inner edges. Returns the two subpath `d` strings, or undefined for
+ * the legacy (centerline-only) format.
+ */
+function extractEdges(svg: string): [string, string] | undefined {
+  const track = parsePaths(svg).find((p) => p.id === "track");
+  if (!track) return undefined;
+  const subs = (track.d.match(/[Mm][^Mm]*/g) ?? [])
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .sort((a, b) => b.length - a.length);
+  return subs.length >= 2 ? [subs[0], subs[1]] : undefined;
+}
+
+/** The start/finish marker is the 2nd path in both formats; its 1st coordinate. */
 function extractStartMarker(svg: string): [number, number] | undefined {
-  const paths = allPaths(svg);
+  const paths = parsePaths(svg);
   if (paths.length < 2) return undefined;
-  const m = paths[1].match(/[Mm]\s*(-?[\d.]+)[ ,]+(-?[\d.]+)/);
+  const m = paths[1].d.match(/[Mm]\s*(-?[\d.]+)[ ,]+(-?[\d.]+)/);
   return m ? [parseFloat(m[1]), parseFloat(m[2])] : undefined;
 }
 
@@ -58,11 +85,13 @@ const ORDER = [
   "interlagos",
 ];
 
+// Slug → circuit base, tolerating a trailing variant letter (monza-7b → monza).
+const baseSlug = (slug: string) => slug.replace(/-\d+[a-z]?$/, "");
+
 const svgTracks: TrackDef[] = Object.entries(svgRaw)
   .map(([path, raw]): TrackDef | null => {
     const slug = path.split("/").pop()!.replace(/\.svg$/, ""); // e.g. monza-7
-    const base = slug.replace(/-\d+$/, ""); // e.g. monza
-    const lap = lapTimeFor(base);
+    const lap = lapTimeFor(baseSlug(slug));
     if (!lap) return null;
     return {
       id: slug,
@@ -70,14 +99,15 @@ const svgTracks: TrackDef[] = Object.entries(svgRaw)
       baseLapTime: lap.time,
       width: 54,
       svgPath: extractCenterlinePath(raw),
+      edges: extractEdges(raw),
       startMarker: extractStartMarker(raw),
       verso: lap.verso,
     };
   })
   .filter((t): t is TrackDef => t !== null)
   .sort((a, b) => {
-    const ia = ORDER.indexOf(a.id.replace(/-\d+$/, ""));
-    const ib = ORDER.indexOf(b.id.replace(/-\d+$/, ""));
+    const ia = ORDER.indexOf(baseSlug(a.id));
+    const ib = ORDER.indexOf(baseSlug(b.id));
     return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
   });
 

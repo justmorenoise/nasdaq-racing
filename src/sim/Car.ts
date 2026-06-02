@@ -16,6 +16,7 @@ export class Car {
   price = 0;
 
   progress = 0; // cumulative world distance
+  distance = 0; // odometer: distance actually travelled (for the lap count)
   targetProgress = 0; // standings-driven target slot (set each frame)
   worldSpeed = 0; // instantaneous speed (for FX / overtake logic)
   relSpeed = 0; // local profile speed in [vMin, vMax] (for camera zoom)

@@ -36,9 +36,20 @@ async function boot() {
   const params = new URLSearchParams(location.search);
   // Dev-only time acceleration: ?speed=10 makes a lap take 1/10th the time.
   const timeScale = Math.max(1, Number(params.get("speed")) || 1);
-  // ?demo=N runs a compressed N-second session; otherwise the real US session.
+  // ?demo=N runs a compressed N-second session that ends with a podium.
   const demoSeconds = params.has("demo") ? Number(params.get("demo")) || 120 : null;
-  const clock = new RaceClock(demoSeconds);
+
+  // Feed selection: real data (Supabase) is the default when configured;
+  // ?feed=demo forces the offline simulated feed (also the fallback when the
+  // Supabase env vars are missing).
+  const supaUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
+  const supaKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
+  const wantDemo = params.get("feed") === "demo";
+  const useSupabase = !wantDemo && !!supaUrl && !!supaKey;
+
+  // Offline/demo runs the race endlessly so it can be shown at any hour without
+  // hitting the US market close; an explicit ?demo=N still ends with a podium.
+  const clock = new RaceClock(demoSeconds, !useSupabase && demoSeconds == null);
   const trackId = params.get("track") || DEFAULT_TRACK_ID;
 
   const world = new Container();
@@ -81,13 +92,6 @@ async function boot() {
   app.stage.addChild(minimap.container);
   minimap.layout(app.screen.width);
 
-  // Feed selection: real data (Supabase) is the default when configured;
-  // ?feed=demo forces the offline simulated feed. (Falls back to simulated if
-  // Supabase env vars are missing.)
-  const supaUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
-  const supaKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
-  const wantDemo = params.get("feed") === "demo";
-  const useSupabase = !wantDemo && !!supaUrl && !!supaKey;
   const feed: PriceFeed = useSupabase
     ? new SupabaseFeed(supaUrl!, supaKey!)
     : new SimulatedFeed();
@@ -162,7 +166,6 @@ async function boot() {
 
   let uiAccum = 0;
   let directorAccum = 0;
-  let battleSymbols = new Set<string>();
   const frame = (dt: number) => {
     const clk = clock.sample();
     if (clk.state === "running") model.update(dt * timeScale);
@@ -191,17 +194,14 @@ async function boot() {
         leaderSym = car.symbol;
       }
     }
-    // Declutter: in full view label only the leader + cars in a battle; in
-    // chase view (few cars on screen) label everyone.
-    const inChase = camera.currentMode === "chase";
     for (const [sym, car] of model.cars) {
       // Boost glow decays in real time (independent of sim time-scale).
       if (car.boost > 0) car.boost = Math.max(0, car.boost - dt * 1.1);
-      const showLabel =
-        labelsOn && (inChase || sym === leaderSym || battleSymbols.has(sym));
+      // Labels follow the global toggle (rendered in a top layer so names in a
+      // pack never hide behind another car).
       carViews
         .get(sym)
-        ?.update(model.poseForCar(car), labelScale, showLabel, sym === leaderSym);
+        ?.update(model.poseForCar(car), labelScale, labelsOn, sym === leaderSym);
     }
     minimap.update(camera.followedSymbol);
 
@@ -217,7 +217,6 @@ async function boot() {
       leaderboard.update(byPct, camera.followedSymbol);
       const battles = detectBattles(model.cars.values(), track);
       battleBar.update(battles);
-      battleSymbols = new Set(battles.flatMap((b) => b.symbols));
       raceHud.setStatus(clk);
 
       // Broadcast gap readout for the chased car.

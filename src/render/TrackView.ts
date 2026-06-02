@@ -1,13 +1,32 @@
-import { Container, Graphics } from "pixi.js";
+import { Container, Graphics, Sprite } from "pixi.js";
 import { CONFIG } from "../config";
 import type { Track } from "../track/Track";
+import type { Pt } from "../track/centerline";
 import { offsetPoint, type TrackLayout } from "../track/corners";
 import {
   asphaltTexture,
   grassTexture,
+  grassVariationTexture,
   gravelTexture,
   pattern,
 } from "./textures";
+
+/** Flatten a polyline to the [x0,y0,x1,y1,…] form Graphics.poly expects. */
+function flat(loop: Pt[]): number[] {
+  const out: number[] = [];
+  for (const p of loop) out.push(p.x, p.y);
+  return out;
+}
+
+/** Shoelace area (sign = winding); only its magnitude is used here. */
+function polyArea(loop: Pt[]): number {
+  let s = 0;
+  for (let i = 0; i < loop.length; i++) {
+    const j = (i + 1) % loop.length;
+    s += loop[i].x * loop[j].y - loop[j].x * loop[i].y;
+  }
+  return s / 2;
+}
 
 /**
  * Renders the racing surface: a textured grass background, gravel run-off at
@@ -23,6 +42,9 @@ export class TrackView {
     private layout: TrackLayout,
   ) {
     this.container.addChild(this.grassBackground());
+    // The dark seam is the asphalt's own stroke when we fill from real edges;
+    // in the centerline-stroke fallback it's a separate wider ribbon underneath.
+    if (!this.track.edgeLeft) this.container.addChild(this.outline());
     this.container.addChild(this.runOff());
     this.container.addChild(this.asphalt());
     this.container.addChild(this.tarmacPatches());
@@ -41,40 +63,100 @@ export class TrackView {
     return this.track.samples.length - 1;
   }
 
-  private grassBackground(): Graphics {
-    const g = new Graphics();
+  /**
+   * A point on (d=0) or offset `d` outward from the track edge on `side`
+   * (+1 = left/+normal, -1 = right/-normal) at centerline sample `i`.
+   *
+   * With real edges this rides the actual track boundary and offsets along the
+   * local outward direction; without them it offsets the centerline by half the
+   * fixed width plus `d`, clamped so tight corners don't self-intersect.
+   */
+  private bandPt(i: number, side: number, d: number): Pt {
+    const s = this.track.samples[i];
+    if (this.track.edgeLeft) {
+      const e = side >= 0 ? this.track.edgeLeft[i] : this.track.edgeRight![i];
+      const dx = e.x - s.x;
+      const dy = e.y - s.y;
+      const len = Math.hypot(dx, dy) || 1;
+      return { x: e.x + (dx / len) * d, y: e.y + (dy / len) * d };
+    }
+    return offsetPoint(s, side * (this.half + d));
+  }
+
+  private grassBackground(): Container {
+    const c = new Container();
     const b = this.track.bounds;
     const m = CONFIG.scenery.grassMargin;
-    g.rect(b.minX - m, b.minY - m, b.maxX - b.minX + 2 * m, b.maxY - b.minY + 2 * m).fill(
-      pattern("grass", grassTexture(), CONFIG.scenery.grassTile),
-    );
+    const x = b.minX - m;
+    const y = b.minY - m;
+    const w = b.maxX - b.minX + 2 * m;
+    const h = b.maxY - b.minY + 2 * m;
+    // Fine tiled blades …
+    const base = new Graphics();
+    base.rect(x, y, w, h).fill(pattern("grass", grassTexture(), CONFIG.scenery.grassTile));
+    c.addChild(base);
+    // … plus a single non-repeating tonal overlay stretched over the whole area.
+    const variation = new Sprite(grassVariationTexture(w, h));
+    variation.position.set(x, y);
+    variation.width = w;
+    variation.height = h;
+    c.addChild(variation);
+    return c;
+  }
+
+  /** Trace the closed centerline polyline onto a Graphics (no stroke/fill). */
+  private appendCenterPath(g: Graphics): void {
+    const s = this.track.samples;
+    g.moveTo(s[0].x, s[0].y);
+    for (let i = 1; i < this.n; i++) g.lineTo(s[i].x, s[i].y);
+    g.closePath();
+  }
+
+  /**
+   * Surfaces are drawn by *stroking the centerline* rather than filling a
+   * parallel-offset polygon: a stroked polyline with round joins renders a clean
+   * constant-width ribbon even through chicanes, with none of the self-
+   * intersection creases that offset polygons produce in tight concave necks.
+   */
+  private ribbon(width: number, style: object): Graphics {
+    const g = new Graphics();
+    this.appendCenterPath(g);
+    g.stroke({ width, cap: "round", join: "round", ...style });
     return g;
   }
 
-  /** Closed ribbon polygon (left edge forward, right edge back) at ±offset,
-   *  with offsets clamped so tight corners don't self-intersect. */
-  private ribbonPoly(offset: number): number[] {
-    const s = this.track.samples;
+  /** Dark seam just wider than the asphalt, peeking out as a crisp track edge. */
+  private outline(): Graphics {
+    return this.ribbon(this.track.def.width + 5, { color: 0x10141c, alpha: 0.95 });
+  }
+
+  /** Closed asphalt ribbon polygon from the real edges (left fwd, right back). */
+  private edgeRibbonPoly(i0 = 0, i1 = this.n - 1): number[] {
+    const L = this.track.edgeLeft!;
+    const R = this.track.edgeRight!;
     const poly: number[] = [];
-    for (let i = 0; i < this.n; i++) {
-      const p = offsetPoint(s[i], offset);
-      poly.push(p.x, p.y);
-    }
-    for (let i = this.n - 1; i >= 0; i--) {
-      const p = offsetPoint(s[i], -offset);
-      poly.push(p.x, p.y);
-    }
+    for (let i = i0; i <= i1; i++) poly.push(L[i].x, L[i].y);
+    for (let i = i1; i >= i0; i--) poly.push(R[i].x, R[i].y);
     return poly;
   }
 
   private asphalt(): Graphics {
-    const g = new Graphics();
-    g.poly(this.ribbonPoly(this.half)).fill(
-      pattern("asphalt", asphaltTexture(), CONFIG.scenery.asphaltTile),
-    );
-    // Crisp dark seam between asphalt and the surroundings.
-    g.stroke({ width: 2, color: 0x10141c, alpha: 0.9 });
-    return g;
+    const fill = pattern("asphalt", asphaltTexture(), CONFIG.scenery.asphaltTile);
+    if (this.track.edgeLoops) {
+      // The real track is the ring between the two closed edge loops. Fill the
+      // outer loop fully, then restore the infield with grass — a closed ring
+      // with no start/finish seam (which an open left+right band would leave).
+      const [a, b] = this.track.edgeLoops;
+      const [outer, inner] = Math.abs(polyArea(a)) >= Math.abs(polyArea(b)) ? [a, b] : [b, a];
+      const g = new Graphics();
+      g.poly(flat(outer)).fill(fill);
+      g.poly(flat(inner)).fill(pattern("grass", grassTexture(), CONFIG.scenery.grassTile));
+      // Crisp dark seam on both boundaries.
+      g.poly(flat(outer)).stroke({ width: 3, color: 0x10141c, alpha: 0.9, join: "round" });
+      g.poly(flat(inner)).stroke({ width: 3, color: 0x10141c, alpha: 0.9, join: "round" });
+      return g;
+    }
+    return this.ribbon(this.track.def.width, { fill });
   }
 
   /** A few darker, freshly-resurfaced asphalt stretches for variety. */
@@ -84,16 +166,13 @@ export class TrackView {
     for (const [a, b] of CONFIG.scenery.tarmacPatches) {
       const i0 = Math.max(0, Math.floor(a * this.n));
       const i1 = Math.min(this.n - 1, Math.floor(b * this.n));
-      const poly: number[] = [];
-      for (let i = i0; i <= i1; i++) {
-        const p = offsetPoint(s[i], this.half - 0.5);
-        poly.push(p.x, p.y);
+      if (this.track.edgeLeft) {
+        g.poly(this.edgeRibbonPoly(i0, i1)).fill({ color: 0x2b2e36, alpha: 0.5 });
+      } else {
+        g.moveTo(s[i0].x, s[i0].y);
+        for (let i = i0 + 1; i <= i1; i++) g.lineTo(s[i].x, s[i].y);
+        g.stroke({ width: this.track.def.width, color: 0x2b2e36, alpha: 0.5, cap: "butt", join: "round" });
       }
-      for (let i = i1; i >= i0; i--) {
-        const p = offsetPoint(s[i], -(this.half - 0.5));
-        poly.push(p.x, p.y);
-      }
-      g.poly(poly).fill({ color: 0x2b2e36, alpha: 0.55 });
     }
     return g;
   }
@@ -101,7 +180,6 @@ export class TrackView {
   /** Gravel traps on the outside of each corner, tapered to nothing at the ends. */
   private runOff(): Graphics {
     const g = new Graphics();
-    const s = this.track.samples;
     const w = CONFIG.scenery.runOffWidth;
     const gravel = pattern("gravel", gravelTexture(), CONFIG.scenery.gravelTile);
     for (const run of this.layout.runs) {
@@ -110,10 +188,10 @@ export class TrackView {
       const inner: number[] = [];
       const outer: number[] = [];
       for (let j = 0; j < m; j++) {
-        const sample = s[run.indices[j]];
+        const i = run.indices[j];
         const taper = Math.sin((Math.PI * j) / (m - 1 || 1)); // 0 at ends, 1 mid
-        const inP = offsetPoint(sample, outSign * this.half);
-        const outP = offsetPoint(sample, outSign * (this.half + w * taper));
+        const inP = this.bandPt(i, outSign, 0);
+        const outP = this.bandPt(i, outSign, w * taper);
         inner.push(inP.x, inP.y);
         outer.push(outP.x, outP.y);
       }
@@ -124,21 +202,26 @@ export class TrackView {
     return g;
   }
 
-  /** White track-limit lines just inside each asphalt edge. */
+  /**
+   * White track-limit lines, drawn only along the straights. Through corners
+   * the kerbs already mark the edge, and on the centerline-offset fallback the
+   * edge line is exactly what self-intersects in chicanes — so we omit corners.
+   */
   private edgeLines(): Graphics {
     const g = new Graphics();
-    const off = this.half - 1.5;
-    const s = this.track.samples;
-    for (const side of [1, -1]) {
-      const p0 = offsetPoint(s[0], side * off);
-      g.moveTo(p0.x, p0.y);
-      for (let i = 1; i < this.n; i++) {
-        const p = offsetPoint(s[i], side * off);
-        g.lineTo(p.x, p.y);
+    for (const straight of this.layout.straights) {
+      const idx = straight.indices;
+      if (idx.length < 2) continue;
+      for (const side of [1, -1]) {
+        const p0 = this.bandPt(idx[0], side, -1.5);
+        g.moveTo(p0.x, p0.y);
+        for (let k = 1; k < idx.length; k++) {
+          const p = this.bandPt(idx[k], side, -1.5);
+          g.lineTo(p.x, p.y);
+        }
       }
-      g.closePath();
     }
-    g.stroke({ width: 1.4, color: 0xffffff, alpha: 0.35 });
+    g.stroke({ width: 1.4, color: 0xffffff, alpha: 0.32 });
     return g;
   }
 
@@ -154,24 +237,22 @@ export class TrackView {
     return g;
   }
 
-  /** Alternating red/white kerb cells straddling the asphalt edge on one side. */
+  /** Alternating red/white kerb cells straddling the track edge on one side. */
   private kerbStrip(g: Graphics, indices: number[], side: number): void {
     const s = this.track.samples;
     const w = CONFIG.scenery.kerbWidth;
-    const inOff = side * (this.half - w * 0.3);
-    const outOff = side * (this.half + w * 0.7);
     let acc = 0;
     for (let j = 0; j < indices.length - 1; j++) {
-      const a = s[indices[j]];
-      const b = s[indices[j + 1]];
+      const ia = indices[j];
+      const ib = indices[j + 1];
       const color =
         Math.floor(acc / CONFIG.scenery.kerbCellLen) % 2 === 0 ? 0xd21f1f : 0xf2f2f2;
-      const ai = offsetPoint(a, inOff);
-      const bi = offsetPoint(b, inOff);
-      const bo = offsetPoint(b, outOff);
-      const ao = offsetPoint(a, outOff);
+      const ai = this.bandPt(ia, side, -w * 0.3); // toward the track
+      const bi = this.bandPt(ib, side, -w * 0.3);
+      const bo = this.bandPt(ib, side, w * 0.7); // toward the run-off
+      const ao = this.bandPt(ia, side, w * 0.7);
       g.poly([ai.x, ai.y, bi.x, bi.y, bo.x, bo.y, ao.x, ao.y]).fill(color);
-      acc += Math.hypot(b.x - a.x, b.y - a.y);
+      acc += Math.hypot(s[ib].x - s[ia].x, s[ib].y - s[ia].y);
     }
   }
 

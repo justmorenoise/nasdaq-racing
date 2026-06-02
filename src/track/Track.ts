@@ -16,6 +16,10 @@ export interface TrackDef {
   points?: [number, number][];
   /** An SVG path `d` (centerline) sampled directly. Use this OR `points`. */
   svgPath?: string;
+  /** Optional real track edges (two closed SVG subpaths: outer + inner). When
+   *  present the renderer draws the asphalt/kerbs from these instead of
+   *  offsetting the centerline by a fixed width. */
+  edges?: [string, string];
   /** Start/finish marker location in source (pre-scale) coords, if known. */
   startMarker?: [number, number];
   /** Travel direction: clockwise or counter-clockwise (as seen on screen). */
@@ -90,6 +94,13 @@ export class Track {
   readonly bounds: { minX: number; minY: number; maxX: number; maxY: number };
   /** Arc-length of the start/finish line (0 if no marker is known). */
   readonly startDist: number;
+  /** Real track edges, when the layout provides them (else null → the renderer
+   *  falls back to offsetting the centerline by a fixed width). The two loops
+   *  are the raw sampled edges; edgeLeft/edgeRight hold, per centerline sample,
+   *  the point on the edge to its left (+normal) / right (-normal). */
+  readonly edgeLoops: [Pt[], Pt[]] | null;
+  readonly edgeLeft: Pt[] | null;
+  readonly edgeRight: Pt[] | null;
 
   constructor(def: TrackDef, centerline: Pt[] = buildCenterline(def)) {
     this.def = def;
@@ -102,6 +113,97 @@ export class Track {
 
     this.bounds = this.computeBounds();
     this.startDist = this.computeStartDist();
+
+    if (def.edges) {
+      const e = this.computeEdges(def.edges);
+      this.edgeLoops = e.loops;
+      this.edgeLeft = e.left;
+      this.edgeRight = e.right;
+    } else {
+      this.edgeLoops = null;
+      this.edgeLeft = null;
+      this.edgeRight = null;
+    }
+  }
+
+  /**
+   * Sample the two edge loops and, for each centerline sample, find the nearest
+   * point on each loop, classifying them as the left/right edge by the sign of
+   * their offset along the centerline normal. Falls back to a fixed half-width
+   * offset for the rare sample where both nearest points land on the same side.
+   */
+  private computeEdges(edges: [string, string]): {
+    loops: [Pt[], Pt[]];
+    left: Pt[];
+    right: Pt[];
+  } {
+    const loopA = sampleSvgPath(edges[0], SVG_SAMPLES, SVG_SCALE);
+    const loopB = sampleSvgPath(edges[1], SVG_SAMPLES, SVG_SCALE);
+    const n = this.samples.length - 1;
+    const half = this.def.width / 2;
+
+    // Orient both edge loops the same rotational way as the centerline and align
+    // their start, so we can pair points by *progress*: searching only a window
+    // around the expected position prevents snapping to a different, nearby part
+    // of the track (e.g. where two straights run close together).
+    const clSign = Math.sign(signedArea(this.samples.slice(0, n)));
+    const orient = (loop: Pt[]) =>
+      Math.sign(signedArea(loop)) !== clSign ? loop.reverse() : loop;
+    orient(loopA);
+    orient(loopB);
+    const startOf = (loop: Pt[]) => {
+      const s0 = this.samples[0];
+      let bi = 0;
+      let bd = Infinity;
+      loop.forEach((p, k) => {
+        const d = (p.x - s0.x) ** 2 + (p.y - s0.y) ** 2;
+        if (d < bd) {
+          bd = d;
+          bi = k;
+        }
+      });
+      return bi;
+    };
+    const aStart = startOf(loopA);
+    const bStart = startOf(loopB);
+    const winNearest = (loop: Pt[], start: number, frac: number, x: number, y: number) => {
+      const M = loop.length;
+      const W = Math.max(8, Math.round(0.12 * M));
+      const c = start + Math.round(frac * M);
+      let best = loop[((c % M) + M) % M];
+      let bd = Infinity;
+      for (let d = -W; d <= W; d++) {
+        const p = loop[(((c + d) % M) + M) % M];
+        const dd = (p.x - x) ** 2 + (p.y - y) ** 2;
+        if (dd < bd) {
+          bd = dd;
+          best = p;
+        }
+      }
+      return best;
+    };
+
+    const left: Pt[] = [];
+    const right: Pt[] = [];
+    for (let i = 0; i < n; i++) {
+      const s = this.samples[i];
+      const f = i / n;
+      const a = winNearest(loopA, aStart, f, s.x, s.y);
+      const b = winNearest(loopB, bStart, f, s.x, s.y);
+      const sa = (a.x - s.x) * s.nx + (a.y - s.y) * s.ny;
+      const sb = (b.x - s.x) * s.nx + (b.y - s.y) * s.ny;
+      if (sa >= 0 && sb < 0) {
+        left.push(a);
+        right.push(b);
+      } else if (sb >= 0 && sa < 0) {
+        left.push(b);
+        right.push(a);
+      } else {
+        left.push({ x: s.x + s.nx * half, y: s.y + s.ny * half });
+        right.push({ x: s.x - s.nx * half, y: s.y - s.ny * half });
+      }
+    }
+    return { loops: [loopA, loopB], left, right };
   }
 
   /** Nearest centerline arc-length to the start/finish marker. */

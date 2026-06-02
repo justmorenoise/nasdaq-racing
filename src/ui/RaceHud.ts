@@ -51,11 +51,13 @@ export class RaceHud {
 
   showPodium(order: Car[]): void {
     if (!this.podium.classList.contains("hidden")) return;
-    const top = order.slice(0, 3);
+    // The day's result is the final standings: rank by daily % change (best
+    // first), not by the on-track running order.
+    const top = [...order].sort((a, b) => b.changePct - a.changePct).slice(0, 3);
     const medals = ["🥇", "🥈", "🥉"];
     const rows = top
       .map((car, i) => {
-        const laps = (car.progress / this.trackLength).toFixed(1);
+        const laps = Math.max(0, car.distance / this.trackLength).toFixed(1);
         const sign = car.changePct >= 0 ? "+" : "";
         const cls = car.changePct >= 0 ? "up" : "down";
         const color = `#${car.color.toString(16).padStart(6, "0")}`;

@@ -129,6 +129,7 @@ export class RaceModel {
       car.relSpeed = this.track.relSpeedAt(car.progress);
       car.worldSpeed = car.relSpeed * basePaceScalar * adjust;
       car.progress += car.worldSpeed * dt;
+      car.distance += car.worldSpeed * dt; // monotonic odometer for lap count
     }
 
     this.recomputeOrder();

@@ -117,7 +117,7 @@ export const CONFIG = {
 
     /** Texture tile scale: world units per texture tile (bigger = coarser). */
     asphaltTile: 64,
-    grassTile: 150,
+    grassTile: 90,
     gravelTile: 48,
 
     /** "New tarmac" patches: a few darker, freshly-resurfaced stretches. Each
