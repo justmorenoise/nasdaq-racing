@@ -86,6 +86,39 @@ export function buildCenterline(def: TrackDef): Pt[] {
   return pts;
 }
 
+type Seg = [Pt, Pt];
+
+/** Closed polyline → its segment list (including the wrap-around segment). */
+function loopSegments(loop: Pt[]): Seg[] {
+  const segs: Seg[] = [];
+  for (let i = 0; i < loop.length; i++) segs.push([loop[i], loop[(i + 1) % loop.length]]);
+  return segs;
+}
+
+/**
+ * Nearest forward intersection of the ray (px,py)+t·(dx,dy), t>0, with any
+ * segment — i.e. where the centerline normal first crosses a track edge.
+ */
+function castRay(segs: Seg[], px: number, py: number, dx: number, dy: number): Pt | null {
+  let bestT = Infinity;
+  let hit: Pt | null = null;
+  for (const [a, b] of segs) {
+    const ex = b.x - a.x;
+    const ey = b.y - a.y;
+    const det = ex * dy - dx * ey;
+    if (Math.abs(det) < 1e-9) continue; // parallel
+    const qx = a.x - px;
+    const qy = a.y - py;
+    const t = (ex * qy - ey * qx) / det; // distance along the ray
+    const u = (dx * qy - dy * qx) / det; // position along the segment
+    if (t > 1e-6 && u >= 0 && u <= 1 && t < bestT) {
+      bestT = t;
+      hit = { x: px + dx * t, y: py + dy * t };
+    }
+  }
+  return hit;
+}
+
 export class Track {
   readonly def: TrackDef;
   readonly samples: TrackSample[];
@@ -127,10 +160,13 @@ export class Track {
   }
 
   /**
-   * Sample the two edge loops and, for each centerline sample, find the nearest
-   * point on each loop, classifying them as the left/right edge by the sign of
-   * their offset along the centerline normal. Falls back to a fixed half-width
-   * offset for the rare sample where both nearest points land on the same side.
+   * Sample the two edge loops and, for each centerline sample, find the left and
+   * right edge points by casting a ray from the centerline along its ± normal
+   * and taking the nearest crossing of either loop. This lands the edge point
+   * exactly on the real track boundary at that station (so kerbs/run-off sit on
+   * the asphalt edge for any width), and is robust to edited layouts — no
+   * progress/arc-length pairing to drift. Falls back to a fixed half-width when
+   * a ray finds no crossing (centerline outside the ribbon).
    */
   private computeEdges(edges: [string, string]): {
     loops: [Pt[], Pt[]];
@@ -141,67 +177,14 @@ export class Track {
     const loopB = sampleSvgPath(edges[1], SVG_SAMPLES, SVG_SCALE);
     const n = this.samples.length - 1;
     const half = this.def.width / 2;
-
-    // Orient both edge loops the same rotational way as the centerline and align
-    // their start, so we can pair points by *progress*: searching only a window
-    // around the expected position prevents snapping to a different, nearby part
-    // of the track (e.g. where two straights run close together).
-    const clSign = Math.sign(signedArea(this.samples.slice(0, n)));
-    const orient = (loop: Pt[]) =>
-      Math.sign(signedArea(loop)) !== clSign ? loop.reverse() : loop;
-    orient(loopA);
-    orient(loopB);
-    const startOf = (loop: Pt[]) => {
-      const s0 = this.samples[0];
-      let bi = 0;
-      let bd = Infinity;
-      loop.forEach((p, k) => {
-        const d = (p.x - s0.x) ** 2 + (p.y - s0.y) ** 2;
-        if (d < bd) {
-          bd = d;
-          bi = k;
-        }
-      });
-      return bi;
-    };
-    const aStart = startOf(loopA);
-    const bStart = startOf(loopB);
-    const winNearest = (loop: Pt[], start: number, frac: number, x: number, y: number) => {
-      const M = loop.length;
-      const W = Math.max(8, Math.round(0.12 * M));
-      const c = start + Math.round(frac * M);
-      let best = loop[((c % M) + M) % M];
-      let bd = Infinity;
-      for (let d = -W; d <= W; d++) {
-        const p = loop[(((c + d) % M) + M) % M];
-        const dd = (p.x - x) ** 2 + (p.y - y) ** 2;
-        if (dd < bd) {
-          bd = dd;
-          best = p;
-        }
-      }
-      return best;
-    };
+    const segs = [...loopSegments(loopA), ...loopSegments(loopB)];
 
     const left: Pt[] = [];
     const right: Pt[] = [];
     for (let i = 0; i < n; i++) {
       const s = this.samples[i];
-      const f = i / n;
-      const a = winNearest(loopA, aStart, f, s.x, s.y);
-      const b = winNearest(loopB, bStart, f, s.x, s.y);
-      const sa = (a.x - s.x) * s.nx + (a.y - s.y) * s.ny;
-      const sb = (b.x - s.x) * s.nx + (b.y - s.y) * s.ny;
-      if (sa >= 0 && sb < 0) {
-        left.push(a);
-        right.push(b);
-      } else if (sb >= 0 && sa < 0) {
-        left.push(b);
-        right.push(a);
-      } else {
-        left.push({ x: s.x + s.nx * half, y: s.y + s.ny * half });
-        right.push({ x: s.x - s.nx * half, y: s.y - s.ny * half });
-      }
+      left.push(castRay(segs, s.x, s.y, s.nx, s.ny) ?? { x: s.x + s.nx * half, y: s.y + s.ny * half });
+      right.push(castRay(segs, s.x, s.y, -s.nx, -s.ny) ?? { x: s.x - s.nx * half, y: s.y - s.ny * half });
     }
     return { loops: [loopA, loopB], left, right };
   }

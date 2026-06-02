@@ -65,15 +65,6 @@ function extractStartMarker(svg: string): [number, number] | undefined {
   return m ? [parseFloat(m[1]), parseFloat(m[2])] : undefined;
 }
 
-function lapTimeFor(
-  base: string,
-): { name: string; time: number; verso?: "cw" | "ccw" } | null {
-  const entry = lapTimes.find((c) => c.circuito.toLowerCase() === base);
-  return entry
-    ? { name: entry.circuito, time: entry.tempo_secondi, verso: entry.verso }
-    : null;
-}
-
 // Desired display order (by file slug base).
 const ORDER = [
   "monza",
@@ -88,20 +79,27 @@ const ORDER = [
 // Slug → circuit base, tolerating a trailing variant letter (monza-7b → monza).
 const baseSlug = (slug: string) => slug.replace(/-\d+[a-z]?$/, "");
 
-const svgTracks: TrackDef[] = Object.entries(svgRaw)
-  .map(([path, raw]): TrackDef | null => {
-    const slug = path.split("/").pop()!.replace(/\.svg$/, ""); // e.g. monza-7
-    const lap = lapTimeFor(baseSlug(slug));
-    if (!lap) return null;
+// circuits.json is the source of truth: it lists the available circuits and,
+// via `file`, which SVG each one uses (so e.g. Monza can switch to monza-7b.svg
+// without the old monza-7.svg also showing up).
+const svgByFile: Record<string, string> = {};
+for (const [path, raw] of Object.entries(svgRaw)) {
+  svgByFile[path.split("/").pop()!] = raw;
+}
+
+const svgTracks: TrackDef[] = lapTimes
+  .map((entry): TrackDef | null => {
+    const raw = entry.file ? svgByFile[entry.file] : undefined;
+    if (!raw) return null;
     return {
-      id: slug,
-      name: lap.name,
-      baseLapTime: lap.time,
+      id: entry.file!.replace(/\.svg$/, ""),
+      name: entry.circuito,
+      baseLapTime: entry.tempo_secondi,
       width: 54,
       svgPath: extractCenterlinePath(raw),
       edges: extractEdges(raw),
       startMarker: extractStartMarker(raw),
-      verso: lap.verso,
+      verso: entry.verso,
     };
   })
   .filter((t): t is TrackDef => t !== null)
