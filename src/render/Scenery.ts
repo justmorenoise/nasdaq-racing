@@ -6,10 +6,11 @@ import { offsetPoint, type TrackLayout } from "../track/corners";
 /**
  * Static decorative surroundings, all derived from track geometry and built
  * once: grandstands with packed crowds along the straights, a pit lane and
- * paddock at the start/finish, tire walls lining corner outsides, and recovery
- * cranes at the sharpest corners. Lives in its own world-space container that
- * sits between the racing surface and the cars; everything is placed strictly
- * outside the asphalt so nothing overlaps the track or the cars.
+ * paddock at the start/finish, and recovery cranes at the sharpest corners.
+ * Lives in its own world-space container that sits between the racing surface
+ * and the cars; everything is placed strictly outside the asphalt so nothing
+ * overlaps the track or the cars. (Tire barriers live in TrackView, drawn under
+ * the asphalt so they can never appear on the road.)
  */
 export class Scenery {
   readonly container = new Container();
@@ -25,7 +26,6 @@ export class Scenery {
     this.cy = (b.minY + b.maxY) / 2;
 
     this.container.addChild(this.grandstands());
-    this.container.addChild(this.tireWalls());
     this.container.addChild(this.pitPaddock());
     this.container.addChild(this.cranes());
   }
@@ -165,25 +165,6 @@ export class Scenery {
     }
   }
 
-  private tireWalls(): Graphics {
-    const g = new Graphics();
-    const sc = CONFIG.scenery;
-    const s = this.track.samples;
-    for (const run of this.layout.runs) {
-      const outSign = -run.turnSign;
-      const off = this.half + sc.tireGap;
-      let toggle = 0;
-      for (const i of this.spaced(run.indices, sc.tireSpacing, sc.tireSpacing)) {
-        const p = s[i];
-        const x = p.x + p.nx * outSign * off;
-        const y = p.y + p.ny * outSign * off;
-        g.circle(x, y, sc.tireRadius).fill(toggle % 4 === 0 ? 0xcf2b2b : 0x14171f);
-        g.circle(x, y, sc.tireRadius * 0.45).fill(0x2a2f3a);
-        toggle++;
-      }
-    }
-    return g;
-  }
 
   private cranes(): Graphics {
     const g = new Graphics();
@@ -216,10 +197,30 @@ export class Scenery {
   }
 
   /**
-   * Pit lane, pit wall, garages (with a glass canopy) and a shallow paddock,
-   * all built as thin bands that follow the track on the inside of the
-   * start/finish straight — so the complex stays parallel to the road and never
-   * crosses onto another part of the circuit.
+   * A point `d` world units outside the track edge on `side` (+1 = +normal/left,
+   * -1 = -normal/right) at centerline sample `i`. Rides the real edge when the
+   * track has one (so the complex sits outside the actual asphalt, not a nominal
+   * half-width); otherwise offsets the centerline by half + d.
+   */
+  private edgeOffset(i: number, side: number, d: number): { x: number; y: number } {
+    const s = this.track.samples[i];
+    const edge = this.track.edgeLeft;
+    if (edge) {
+      const e = side >= 0 ? edge[i] : this.track.edgeRight![i];
+      const dx = e.x - s.x;
+      const dy = e.y - s.y;
+      const len = Math.hypot(dx, dy) || 1;
+      return { x: e.x + (dx / len) * d, y: e.y + (dy / len) * d };
+    }
+    return offsetPoint(s, side * (this.half + d));
+  }
+
+  /**
+   * Pit lane, pit wall, garages (with a glass canopy) and a shallow paddock, as
+   * thin bands following the inside of the start/finish straight. All depths are
+   * measured from the real track edge and capped to the infield clearance (the
+   * distance to the next edge inward), so the complex stays by the finish line
+   * and never reaches across a narrow infield onto another part of the track.
    */
   private pitPaddock(): Graphics {
     const g = new Graphics();
@@ -231,30 +232,46 @@ export class Scenery {
     const mid = s[win[Math.floor(win.length / 2)]];
     const inSign = -this.outwardSign(mid); // pit complex sits on the inside
 
-    const laneInner = this.half + sc.pitLaneGap;
+    // Available depth: nearest infield edge crossing across the window, with a
+    // margin so the complex never touches the far track.
+    let clearance = Infinity;
+    for (const i of win) {
+      const inner = this.edgeOffset(i, inSign, 0);
+      const d = this.track.edgeRayDistance(inner.x, inner.y, inSign * s[i].nx, inSign * s[i].ny);
+      if (d < clearance) clearance = d;
+    }
+    const maxDepth = clearance === Infinity ? Infinity : Math.max(0, clearance - 8);
+
+    // Depths from the edge, back (paddock) to front (pit lane).
+    const laneInner = sc.pitLaneGap;
     const laneOuter = laneInner + sc.pitLaneWidth;
-    const garInner = laneOuter + 4;
+    const garInner = laneOuter + 3;
     const garOuter = garInner + sc.garageDepth;
-    const padInner = garOuter + 4;
+    const padInner = garOuter + 3;
     const padOuter = padInner + sc.paddockDepth;
 
-    // Back to front: paddock slab, garage building, glass canopy, pit lane.
-    g.poly(this.bandPoly(win, inSign, padInner, padOuter)).fill(0x232834);
-    g.poly(this.bandPoly(win, inSign, garInner, garOuter)).fill(0x2d323d);
+    // Too tight for even a pit lane → skip the complex entirely.
+    if (laneOuter > maxDepth) return g;
 
-    // Garage-door dividers along the building.
-    for (let k = 0; k < win.length; k += 3) {
-      const a = offsetPoint(s[win[k]], inSign * garInner);
-      const b = offsetPoint(s[win[k]], inSign * garOuter);
-      g.moveTo(a.x, a.y);
-      g.lineTo(b.x, b.y);
+    // Paddock slab (back), only the part that fits.
+    if (padInner < maxDepth) {
+      g.poly(this.bandPoly(win, inSign, padInner, Math.min(padOuter, maxDepth))).fill(0x232834);
     }
-    g.stroke({ width: 1, color: 0x161a21, alpha: 0.7 });
 
-    // Semi-transparent glass canopy over the front of the garages.
-    g.poly(
-      this.bandPoly(win, inSign, garInner, garInner + sc.garageDepth * 0.5),
-    ).fill({ color: 0x9fc4e6, alpha: 0.22 });
+    // Garage building + door dividers + glass canopy, clamped to the clearance.
+    if (garInner < maxDepth) {
+      const gOut = Math.min(garOuter, maxDepth);
+      g.poly(this.bandPoly(win, inSign, garInner, gOut)).fill(0x2d323d);
+      for (let k = 0; k < win.length; k += 3) {
+        const a = this.edgeOffset(win[k], inSign, garInner);
+        const b = this.edgeOffset(win[k], inSign, gOut);
+        g.moveTo(a.x, a.y);
+        g.lineTo(b.x, b.y);
+      }
+      g.stroke({ width: 1, color: 0x161a21, alpha: 0.7 });
+      const canopy = Math.min(garInner + sc.garageDepth * 0.5, maxDepth);
+      g.poly(this.bandPoly(win, inSign, garInner, canopy)).fill({ color: 0x9fc4e6, alpha: 0.22 });
+    }
 
     // Pit lane (paler asphalt) + the white pit wall line at the track side.
     g.poly(this.bandPoly(win, inSign, laneInner, laneOuter)).fill(0x474c57);
@@ -297,14 +314,13 @@ export class Scenery {
     return out;
   }
 
-  /** Ribbon polygon on one side between two offsets, following the samples. */
+  /** Ribbon polygon between two depths outside the edge, following the samples. */
   private bandPoly(indices: number[], side: number, inner: number, outer: number): number[] {
-    const s = this.track.samples;
     const a: number[] = [];
     const b: number[] = [];
     for (const i of indices) {
-      const pi = offsetPoint(s[i], side * inner);
-      const po = offsetPoint(s[i], side * outer);
+      const pi = this.edgeOffset(i, side, inner);
+      const po = this.edgeOffset(i, side, outer);
       a.push(pi.x, pi.y);
       b.push(po.x, po.y);
     }
@@ -321,9 +337,8 @@ export class Scenery {
     color: number,
     width: number,
   ): void {
-    const s = this.track.samples;
     indices.forEach((i, k) => {
-      const p = offsetPoint(s[i], side * off);
+      const p = this.edgeOffset(i, side, off);
       if (k === 0) g.moveTo(p.x, p.y);
       else g.lineTo(p.x, p.y);
     });

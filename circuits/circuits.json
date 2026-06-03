@@ -2,20 +2,21 @@
   {
     "circuito": "Catalunya",
     "tempo_secondi": 75.743,
-    "file": "catalunya-6.svg",
+    "file": "catalunya-6b.svg",
     "verso": "cw"
   },
   {
     "circuito": "Interlagos",
     "tempo_secondi": 72.400,
-    "file": "interlagos-2.svg",
+    "file": "interlagos-2b.svg",
     "verso": "ccw"
   },
   {
     "circuito": "Monaco",
     "tempo_secondi": 73.221,
-    "file": "monaco-6.svg",
-    "verso": "cw"
+    "file": "monaco-6b.svg",
+    "verso": "cw",
+    "scale": 0.6
   },
   {
     "circuito": "Monza",
@@ -26,19 +27,21 @@
   {
     "circuito": "Silverstone",
     "tempo_secondi": 89.337,
-    "file": "silverstone-8.svg",
+    "file": "silverstone-8b.svg",
     "verso": "cw"
   },
   {
     "circuito": "Spa-Francorchamps",
     "tempo_secondi": 104.861,
-    "file": "spa-francorchamps-4.svg",
+    "file": "spa-francorchamps-4b.svg",
     "verso": "cw"
   },
   {
     "circuito": "Suzuka",
     "tempo_secondi": 90.965,
-    "file": "suzuka-2.svg",
-    "verso": "cw"
+    "file": "suzuka-2b.svg",
+    "verso": "cw",
+    "scale": 0.5,
+    "kerbScale": 0.45
   }
 ]

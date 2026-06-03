@@ -28,6 +28,19 @@ function polyArea(loop: Pt[]): number {
   return s / 2;
 }
 
+/** Even-odd ray cast: is (x,y) inside the closed polyline? */
+function pointInPoly(loop: Pt[], x: number, y: number): boolean {
+  let inside = false;
+  for (let i = 0, j = loop.length - 1; i < loop.length; j = i++) {
+    const a = loop[i];
+    const b = loop[j];
+    if (a.y > y !== b.y > y && x < ((b.x - a.x) * (y - a.y)) / (b.y - a.y) + a.x) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
 /**
  * Renders the racing surface: a textured grass background, gravel run-off at
  * corner outsides, a textured asphalt ribbon, red/white kerbs (inside through
@@ -46,6 +59,9 @@ export class TrackView {
     // in the centerline-stroke fallback it's a separate wider ribbon underneath.
     if (!this.track.edgeLeft) this.container.addChild(this.outline());
     this.container.addChild(this.runOff());
+    // Tire barriers sit above the grass/gravel but BELOW the asphalt, so any tire
+    // that would stray onto the track is hidden by the road drawn over it.
+    this.container.addChild(this.tireWalls());
     this.container.addChild(this.asphalt());
     this.container.addChild(this.tarmacPatches());
     this.container.addChild(this.edgeLines());
@@ -143,17 +159,22 @@ export class TrackView {
   private asphalt(): Graphics {
     const fill = pattern("asphalt", asphaltTexture(), CONFIG.scenery.asphaltTile);
     if (this.track.edgeLoops) {
-      // The real track is the ring between the two closed edge loops. Fill the
-      // outer loop fully, then restore the infield with grass — a closed ring
-      // with no start/finish seam (which an open left+right band would leave).
-      const [a, b] = this.track.edgeLoops;
-      const [outer, inner] = Math.abs(polyArea(a)) >= Math.abs(polyArea(b)) ? [a, b] : [b, a];
+      // The real track is the ring between the outer loop and its inner island(s).
+      // Fill the outer loop fully, then restore each infield with grass — a closed
+      // ring with no start/finish seam (which an open left+right band would leave).
+      // Some circuits (e.g. Monaco) enclose several separate inner islands.
+      const loops = [...this.track.edgeLoops].sort(
+        (a, b) => Math.abs(polyArea(b)) - Math.abs(polyArea(a)),
+      );
+      const [outer, ...inner] = loops;
+      const grass = pattern("grass", grassTexture(), CONFIG.scenery.grassTile);
+      const seam = { width: 3, color: 0x10141c, alpha: 0.9, join: "round" } as const;
       const g = new Graphics();
       g.poly(flat(outer)).fill(fill);
-      g.poly(flat(inner)).fill(pattern("grass", grassTexture(), CONFIG.scenery.grassTile));
-      // Crisp dark seam on both boundaries.
-      g.poly(flat(outer)).stroke({ width: 3, color: 0x10141c, alpha: 0.9, join: "round" });
-      g.poly(flat(inner)).stroke({ width: 3, color: 0x10141c, alpha: 0.9, join: "round" });
+      for (const hole of inner) g.poly(flat(hole)).fill(grass);
+      // Crisp dark seam on every boundary.
+      g.poly(flat(outer)).stroke(seam);
+      for (const hole of inner) g.poly(flat(hole)).stroke(seam);
       return g;
     }
     return this.ribbon(this.track.def.width, { fill });
@@ -202,6 +223,70 @@ export class TrackView {
     return g;
   }
 
+  /** The largest edge loop (outer track boundary), or null without real edges. */
+  private outerLoop(): Pt[] | null {
+    const loops = this.track.edgeLoops;
+    if (!loops || loops.length === 0) return null;
+    return loops.reduce((a, b) => (Math.abs(polyArea(a)) >= Math.abs(polyArea(b)) ? a : b));
+  }
+
+  /** Sample indices along a run spaced ~`spacing` world units apart. */
+  private spacedAlong(indices: number[], spacing: number): number[] {
+    const s = this.track.samples;
+    const picks: number[] = [];
+    let acc = Infinity;
+    for (let j = 0; j < indices.length; j++) {
+      if (j > 0) {
+        acc += Math.hypot(
+          s[indices[j]].x - s[indices[j - 1]].x,
+          s[indices[j]].y - s[indices[j - 1]].y,
+        );
+      }
+      if (acc >= spacing) {
+        picks.push(indices[j]);
+        acc = 0;
+      }
+    }
+    return picks;
+  }
+
+  /**
+   * Tire barriers lining corner run-offs: a packed row of tires placed just
+   * outside the real edge. Positions that fall inside the outer track boundary
+   * are dropped (so a barrier never gets drawn on the asphalt), which also breaks
+   * the wall into shorter groups; groups of fewer than 5 tires are skipped so no
+   * lone tire is ever drawn. Rendered under the asphalt as a final safety net.
+   */
+  private tireWalls(): Graphics {
+    const g = new Graphics();
+    const sc = CONFIG.scenery;
+    const r = sc.tireRadius;
+    const outer = this.outerLoop();
+    for (const run of this.layout.runs) {
+      const outSign = -run.turnSign; // outside of the corner
+      let group: Pt[] = [];
+      const flush = () => {
+        if (group.length >= 5) {
+          group.forEach((c, k) => {
+            g.circle(c.x, c.y, r).fill(k % 4 === 0 ? 0xcf2b2b : 0x14171f);
+            g.circle(c.x, c.y, r * 0.45).fill(0x2a2f3a);
+          });
+        }
+        group = [];
+      };
+      for (const i of this.spacedAlong(run.indices, sc.tireSpacing)) {
+        const c = this.bandPt(i, outSign, sc.tireGap);
+        if (outer && pointInPoly(outer, c.x, c.y)) {
+          flush(); // stray onto the track → break the group here
+          continue;
+        }
+        group.push(c);
+      }
+      flush();
+    }
+    return g;
+  }
+
   /**
    * White track-limit lines, drawn only along the straights. Through corners
    * the kerbs already mark the edge, and on the centerline-offset fallback the
@@ -237,22 +322,51 @@ export class TrackView {
     return g;
   }
 
-  /** Alternating red/white kerb cells straddling the track edge on one side. */
+  /**
+   * Alternating red/white kerb cells straddling the track edge on one side.
+   * Cells are re-sampled at a fixed length *along the kerb itself* (not per
+   * centerline sample), so red and white come out evenly regardless of how the
+   * edge stretches/compresses through the corner.
+   */
   private kerbStrip(g: Graphics, indices: number[], side: number): void {
-    const s = this.track.samples;
-    const w = CONFIG.scenery.kerbWidth;
-    let acc = 0;
-    for (let j = 0; j < indices.length - 1; j++) {
-      const ia = indices[j];
-      const ib = indices[j + 1];
-      const color =
-        Math.floor(acc / CONFIG.scenery.kerbCellLen) % 2 === 0 ? 0xd21f1f : 0xf2f2f2;
-      const ai = this.bandPt(ia, side, -w * 0.3); // toward the track
-      const bi = this.bandPt(ib, side, -w * 0.3);
-      const bo = this.bandPt(ib, side, w * 0.7); // toward the run-off
-      const ao = this.bandPt(ia, side, w * 0.7);
-      g.poly([ai.x, ai.y, bi.x, bi.y, bo.x, bo.y, ao.x, ao.y]).fill(color);
-      acc += Math.hypot(s[ib].x - s[ia].x, s[ib].y - s[ia].y);
+    if (indices.length < 2) return;
+    const ks = this.track.def.kerbScale ?? 1;
+    const w = CONFIG.scenery.kerbWidth * ks;
+    const cell = CONFIG.scenery.kerbCellLen * ks;
+    const inner = indices.map((i) => this.bandPt(i, side, -w * 0.3)); // toward track
+    const outer = indices.map((i) => this.bandPt(i, side, w * 0.7)); // toward run-off
+    const mid = indices.map((i) => this.bandPt(i, side, w * 0.2)); // length reference
+
+    const cum = [0];
+    for (let k = 1; k < mid.length; k++) {
+      cum[k] = cum[k - 1] + Math.hypot(mid[k].x - mid[k - 1].x, mid[k].y - mid[k - 1].y);
+    }
+    const total = cum[cum.length - 1];
+    if (total < 1e-3) return;
+
+    // Inner/outer rail point at a given arc length along the kerb.
+    const at = (arc: number) => {
+      let k = 1;
+      while (k < cum.length - 1 && cum[k] < arc) k++;
+      const t = (arc - cum[k - 1]) / (cum[k] - cum[k - 1] || 1);
+      const lerp = (p: Pt, q: Pt) => ({ x: p.x + (q.x - p.x) * t, y: p.y + (q.y - p.y) * t });
+      return { inner: lerp(inner[k - 1], inner[k]), outer: lerp(outer[k - 1], outer[k]) };
+    };
+
+    let pos = 0;
+    let idx = 0;
+    while (pos < total - 1e-3) {
+      const a = at(pos);
+      const b = at(Math.min(pos + cell, total));
+      const color = idx % 2 === 0 ? 0xd21f1f : 0xf2f2f2;
+      g.poly([
+        a.inner.x, a.inner.y,
+        b.inner.x, b.inner.y,
+        b.outer.x, b.outer.y,
+        a.outer.x, a.outer.y,
+      ]).fill(color);
+      pos += cell;
+      idx++;
     }
   }
 

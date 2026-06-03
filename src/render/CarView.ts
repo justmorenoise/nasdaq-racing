@@ -26,12 +26,14 @@ export class CarView {
   constructor(
     private car: Car,
     labelLayer: Container,
+    /** Per-track size lever (default 1): scales the car art and its markers. */
+    private scale = 1,
   ) {
-    this.aura.circle(0, 0, CAR_LEN * 0.6).fill({ color: car.color, alpha: 1 });
+    this.aura.circle(0, 0, CAR_LEN * this.scale * 0.6).fill({ color: car.color, alpha: 1 });
     this.aura.alpha = 0;
     this.root.addChild(this.aura);
 
-    this.leaderRing.circle(0, 0, CAR_LEN * 0.62).stroke({
+    this.leaderRing.circle(0, 0, CAR_LEN * this.scale * 0.62).stroke({
       width: 2,
       color: 0xffd23f,
       alpha: 0.9,
@@ -51,7 +53,7 @@ export class CarView {
     carTexture(baseHex, cascoHex)
       .then((tex) => {
         this.sprite.texture = tex;
-        this.sprite.scale.set(CAR_LEN / tex.height); // height is the long axis
+        this.sprite.scale.set((CAR_LEN * this.scale) / tex.height); // height is the long axis
         this.sprite.visible = true;
       })
       .catch(() => {});
@@ -100,7 +102,7 @@ export class CarView {
     this.label.visible = showLabel;
     if (this.label.visible) {
       this.label.scale.set(labelScale);
-      this.label.position.set(pose.x, pose.y - 14 * labelScale - CAR_W);
+      this.label.position.set(pose.x, pose.y - 14 * labelScale - CAR_W * this.scale);
     }
   }
 

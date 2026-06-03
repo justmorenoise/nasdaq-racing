@@ -1,27 +1,28 @@
 import { computeSpeedProfile } from "./speedProfile";
-import {
-  catmullRomPolyline,
-  sampleSvgPath,
-  type Pt,
-} from "./centerline";
+import { catmullRomPolyline, type Pt } from "./centerline";
 
 export interface TrackDef {
   id: string;
   name: string;
   /** Reference lap time in seconds for a "neutral" (0%) stock. */
   baseLapTime: number;
-  /** Ribbon width in world units. */
+  /** Ribbon width in world units (fallback when no real edges; already scaled). */
   width: number;
-  /** Sparse control points (Catmull-Rom smoothed). Use this OR `svgPath`. */
+  /** Per-circuit size lever: multiplies fallback width and car size (default 1). */
+  scale?: number;
+  /** Per-circuit kerb size lever: multiplies kerb width and cell length
+   *  (default 1). Independent of `scale` so narrow circuits (e.g. Suzuka) can
+   *  shrink their kerbs without touching the car/width scale. */
+  kerbScale?: number;
+  /** Sparse control points (Catmull-Rom smoothed). Use this for hand-made ovals;
+   *  SVG circuits pass a pre-sampled centerline to the constructor instead. */
   points?: [number, number][];
-  /** An SVG path `d` (centerline) sampled directly. Use this OR `points`. */
-  svgPath?: string;
-  /** Optional real track edges (two closed SVG subpaths: outer + inner). When
-   *  present the renderer draws the asphalt/kerbs from these instead of
-   *  offsetting the centerline by a fixed width. */
-  edges?: [string, string];
-  /** Start/finish marker location in source (pre-scale) coords, if known. */
-  startMarker?: [number, number];
+  /** Optional real track edges (closed loops: one outer + N inner islands), in
+   *  world coords. When present the renderer draws the asphalt/kerbs from these
+   *  instead of offsetting the centerline by a fixed width. */
+  edgeLoops?: Pt[][];
+  /** Start/finish marker in world coords, if known. */
+  startWorld?: Pt;
   /** Travel direction: clockwise or counter-clockwise (as seen on screen). */
   verso?: "cw" | "ccw";
 }
@@ -56,7 +57,6 @@ export interface TrackPose {
 
 /** Scale applied to SVG layouts so they sit in the same world scale (~0..1500). */
 export const SVG_SCALE = 3;
-const SVG_SAMPLES = 520;
 const CR_SUBDIV = 22;
 
 /** Signed polygon area (shoelace). In screen coords (y down), > 0 == clockwise. */
@@ -69,21 +69,23 @@ function signedArea(pts: Pt[]): number {
   return a / 2;
 }
 
-/**
- * Build the dense centerline polyline a track definition implies, oriented so
- * that increasing arc length travels in the requested direction (`verso`).
- */
-export function buildCenterline(def: TrackDef): Pt[] {
-  let pts: Pt[];
-  if (def.svgPath) pts = sampleSvgPath(def.svgPath, SVG_SAMPLES, SVG_SCALE);
-  else if (def.points) pts = catmullRomPolyline(def.points, CR_SUBDIV);
-  else throw new Error(`Track ${def.id} has neither points nor svgPath`);
-
-  if (def.verso) {
+/** Reverse a closed polyline if its winding doesn't match the requested verso. */
+export function orientByVerso(pts: Pt[], verso?: "cw" | "ccw"): Pt[] {
+  if (verso) {
     const winding = signedArea(pts) > 0 ? "cw" : "ccw";
-    if (winding !== def.verso) pts.reverse();
+    if (winding !== verso) pts.reverse();
   }
   return pts;
+}
+
+/**
+ * Build the dense centerline for a hand-made (Catmull-Rom) track, oriented so
+ * that increasing arc length travels in the requested direction. SVG circuits
+ * pass their already-sampled centerline to the constructor instead.
+ */
+export function buildCenterline(def: TrackDef): Pt[] {
+  if (!def.points) throw new Error(`Track ${def.id} has no points`);
+  return orientByVerso(catmullRomPolyline(def.points, CR_SUBDIV), def.verso);
 }
 
 type Seg = [Pt, Pt];
@@ -128,12 +130,15 @@ export class Track {
   /** Arc-length of the start/finish line (0 if no marker is known). */
   readonly startDist: number;
   /** Real track edges, when the layout provides them (else null → the renderer
-   *  falls back to offsetting the centerline by a fixed width). The two loops
-   *  are the raw sampled edges; edgeLeft/edgeRight hold, per centerline sample,
-   *  the point on the edge to its left (+normal) / right (-normal). */
-  readonly edgeLoops: [Pt[], Pt[]] | null;
+   *  falls back to offsetting the centerline by a fixed width). The loops are the
+   *  raw sampled edges (one outer + N inner islands); edgeLeft/edgeRight hold, per
+   *  centerline sample, the point on the edge to its left (+normal) / right
+   *  (-normal). */
+  readonly edgeLoops: Pt[][] | null;
   readonly edgeLeft: Pt[] | null;
   readonly edgeRight: Pt[] | null;
+  /** Flattened segments of all edge loops, for ray queries (clearance checks). */
+  private edgeSegments: Seg[] = [];
 
   constructor(def: TrackDef, centerline: Pt[] = buildCenterline(def)) {
     this.def = def;
@@ -147,8 +152,8 @@ export class Track {
     this.bounds = this.computeBounds();
     this.startDist = this.computeStartDist();
 
-    if (def.edges) {
-      const e = this.computeEdges(def.edges);
+    if (def.edgeLoops) {
+      const e = this.computeEdges(def.edgeLoops);
       this.edgeLoops = e.loops;
       this.edgeLeft = e.left;
       this.edgeRight = e.right;
@@ -166,39 +171,74 @@ export class Track {
    * exactly on the real track boundary at that station (so kerbs/run-off sit on
    * the asphalt edge for any width), and is robust to edited layouts — no
    * progress/arc-length pairing to drift. Falls back to a fixed half-width when
-   * a ray finds no crossing (centerline outside the ribbon).
+   * a ray finds no crossing (centerline outside the ribbon). Works with any
+   * number of loops, so a circuit whose infield is split into several islands
+   * (e.g. Monaco) is handled by casting against every loop.
    */
-  private computeEdges(edges: [string, string]): {
-    loops: [Pt[], Pt[]];
+  private computeEdges(loops: Pt[][]): {
+    loops: Pt[][];
     left: Pt[];
     right: Pt[];
   } {
-    const loopA = sampleSvgPath(edges[0], SVG_SAMPLES, SVG_SCALE);
-    const loopB = sampleSvgPath(edges[1], SVG_SAMPLES, SVG_SCALE);
     const n = this.samples.length - 1;
     const half = this.def.width / 2;
-    const segs = [...loopSegments(loopA), ...loopSegments(loopB)];
+    const segs = loops.flatMap(loopSegments);
+    this.edgeSegments = segs;
+
+    // First pass: raw casts on both sides, collecting hit distances.
+    const lh: (Pt | null)[] = [];
+    const rh: (Pt | null)[] = [];
+    const dists: number[] = [];
+    for (let i = 0; i < n; i++) {
+      const s = this.samples[i];
+      const l = castRay(segs, s.x, s.y, s.nx, s.ny);
+      const r = castRay(segs, s.x, s.y, -s.nx, -s.ny);
+      lh.push(l);
+      rh.push(r);
+      if (l) dists.push(Math.hypot(l.x - s.x, l.y - s.y));
+      if (r) dists.push(Math.hypot(r.x - s.x, r.y - s.y));
+    }
+
+    // A ray that slips through a gap (e.g. near the start/finish or a chicane
+    // where loops nearly meet) lands on a far edge, which would make kerbs and
+    // run-off jump across the track. Clamp any cast longer than a few times the
+    // median half-width back along its own normal.
+    dists.sort((a, b) => a - b);
+    const cap = (dists.length ? dists[dists.length >> 1] : half) * 3;
+    const clamp = (px: number, py: number, dx: number, dy: number, hit: Pt | null): Pt => {
+      if (!hit) return { x: px + dx * half, y: py + dy * half };
+      const t = Math.hypot(hit.x - px, hit.y - py);
+      return t > cap ? { x: px + dx * cap, y: py + dy * cap } : hit;
+    };
 
     const left: Pt[] = [];
     const right: Pt[] = [];
     for (let i = 0; i < n; i++) {
       const s = this.samples[i];
-      left.push(castRay(segs, s.x, s.y, s.nx, s.ny) ?? { x: s.x + s.nx * half, y: s.y + s.ny * half });
-      right.push(castRay(segs, s.x, s.y, -s.nx, -s.ny) ?? { x: s.x - s.nx * half, y: s.y - s.ny * half });
+      left.push(clamp(s.x, s.y, s.nx, s.ny, lh[i]));
+      right.push(clamp(s.x, s.y, -s.nx, -s.ny, rh[i]));
     }
-    return { loops: [loopA, loopB], left, right };
+    return { loops, left, right };
+  }
+
+  /**
+   * Distance from (px,py) along the unit direction (dx,dy) to the nearest edge
+   * crossing, or Infinity with no real edges / no hit. Used to size scenery (the
+   * pit complex) so it never reaches across a narrow infield onto the far track.
+   */
+  edgeRayDistance(px: number, py: number, dx: number, dy: number): number {
+    const hit = castRay(this.edgeSegments, px, py, dx, dy);
+    return hit ? Math.hypot(hit.x - px, hit.y - py) : Infinity;
   }
 
   /** Nearest centerline arc-length to the start/finish marker. */
   private computeStartDist(): number {
-    if (!this.def.startMarker) return 0;
-    const scale = this.def.svgPath ? SVG_SCALE : 1;
-    const mx = this.def.startMarker[0] * scale;
-    const my = this.def.startMarker[1] * scale;
+    const marker = this.def.startWorld;
+    if (!marker) return 0;
     let best = 0;
     let bestD = Infinity;
     for (const s of this.samples) {
-      const d = (s.x - mx) ** 2 + (s.y - my) ** 2;
+      const d = (s.x - marker.x) ** 2 + (s.y - marker.y) ** 2;
       if (d < bestD) {
         bestD = d;
         best = s.dist;

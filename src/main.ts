@@ -55,7 +55,7 @@ async function boot() {
   const world = new Container();
   app.stage.addChild(world);
 
-  const track = buildTrack(trackId);
+  const track = await buildTrack(trackId);
   const layout = computeLayout(track);
   world.addChild(new TrackView(track, layout).container);
   world.addChild(new Scenery(track, layout).container);
@@ -73,7 +73,7 @@ async function boot() {
   const syncCarViews = () => {
     for (const [sym, car] of model.cars) {
       if (carViews.has(sym)) continue;
-      const view = new CarView(car, labelLayer);
+      const view = new CarView(car, labelLayer, track.def.scale ?? 1);
       view.root.eventMode = "static";
       view.root.cursor = "pointer";
       view.root.on("pointertap", () => camera.toggleFollow(sym));

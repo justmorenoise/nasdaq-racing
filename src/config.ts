@@ -98,18 +98,19 @@ export const CONFIG = {
     /** Min straight lap-fraction to host a grandstand. */
     standMinStraightFrac: 0.08,
 
-    /** Pit lane + paddock complex along the start/finish straight. Kept shallow
-     *  and following the track so it never overlaps other parts of the circuit. */
-    pitLaneWidth: 24,
-    pitLaneGap: 13, // gap between track edge and pit lane
+    /** Pit lane + paddock complex along the start/finish straight. Measured from
+     *  the real track edge and depth-capped to the infield clearance, so it stays
+     *  near the finish line without ever reaching onto another part of the track. */
+    pitLaneWidth: 14,
+    pitLaneGap: 8, // gap between track edge and pit lane
     pitLaneLen: 300, // length along the straight
-    garageDepth: 26, // garage building band depth
-    paddockDepth: 44, // paddock band depth behind the garages
+    garageDepth: 16, // garage building band depth
+    paddockDepth: 26, // paddock band depth behind the garages
 
-    /** Tire wall: tire radius and spacing along the corner outside. */
+    /** Tire wall: a continuous packed barrier lining the corner run-off. */
     tireRadius: 5,
-    tireGap: 64, // distance from track edge to the wall
-    tireSpacing: 11,
+    tireGap: 54, // distance outside the real track edge (just beyond the run-off)
+    tireSpacing: 9, // center-to-center along the wall (< 2·radius → tires touch)
 
     /** Cranes: how many of the sharpest corners get one, and its size. */
     craneCount: 3,

@@ -1,69 +1,35 @@
-import { Track, type TrackDef } from "./Track";
+import { Track, type TrackDef, SVG_SCALE, orientByVerso } from "./Track";
+import { parseCircuitSvg } from "./svgParse";
 import lapData from "../../circuits/circuits.json";
 
 /**
- * Real circuit layouts come from the SVG files in /circuits (the main <path> is
- * the centerline) with base lap times from circuits.json. Names are the real
- * circuit names as provided in that file.
+ * Real circuit layouts live in the SVG files in /circuits, listed (with base lap
+ * times) in circuits.json. The glob is **lazy**: only the SVG of the circuit
+ * actually built gets fetched — the track menu needs just id+name from the JSON,
+ * and switching tracks reloads the page, so one SVG is ever loaded per session.
  */
-const svgRaw = import.meta.glob("/circuits/*.svg", {
+const svgLoaders = import.meta.glob("/circuits/*.svg", {
   query: "?raw",
   import: "default",
-  eager: true,
-}) as Record<string, string>;
+}) as Record<string, () => Promise<string>>;
 
 const lapTimes = lapData as {
   circuito: string;
   tempo_secondi: number;
   file?: string;
   verso?: "cw" | "ccw";
+  /** Per-circuit size lever: multiplies fallback width and car size (default 1). */
+  scale?: number;
+  /** Per-circuit kerb size lever: multiplies kerb width + cell length (default 1). */
+  kerbScale?: number;
+  /** Fallback ribbon width override in source units (default 54). */
+  width?: number;
 }[];
 
-interface SvgPath {
-  id: string;
-  d: string;
-}
+const DEFAULT_WIDTH = 54;
 
-function parsePaths(svg: string): SvgPath[] {
-  return [...svg.matchAll(/<path\b([^>]*?)\/?>/g)]
-    .map((m) => {
-      const tag = m[1];
-      const d = /\bd="([^"]+)"/.exec(tag)?.[1] ?? "";
-      const id = /\bid="([^"]+)"/.exec(tag)?.[1] ?? "";
-      return { id, d };
-    })
-    .filter((p) => p.d);
-}
-
-function extractCenterlinePath(svg: string): string {
-  // New format tags the centerline `id="centerline"`; older files put it first.
-  const paths = parsePaths(svg);
-  if (paths.length === 0) throw new Error("No path found in circuit SVG");
-  return paths.find((p) => p.id === "centerline")?.d ?? paths[0].d;
-}
-
-/**
- * New format: an `id="track"` path whose two closed subpaths are the track's
- * outer and inner edges. Returns the two subpath `d` strings, or undefined for
- * the legacy (centerline-only) format.
- */
-function extractEdges(svg: string): [string, string] | undefined {
-  const track = parsePaths(svg).find((p) => p.id === "track");
-  if (!track) return undefined;
-  const subs = (track.d.match(/[Mm][^Mm]*/g) ?? [])
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .sort((a, b) => b.length - a.length);
-  return subs.length >= 2 ? [subs[0], subs[1]] : undefined;
-}
-
-/** The start/finish marker is the 2nd path in both formats; its 1st coordinate. */
-function extractStartMarker(svg: string): [number, number] | undefined {
-  const paths = parsePaths(svg);
-  if (paths.length < 2) return undefined;
-  const m = paths[1].d.match(/[Mm]\s*(-?[\d.]+)[ ,]+(-?[\d.]+)/);
-  return m ? [parseFloat(m[1]), parseFloat(m[2])] : undefined;
-}
+// id → SVG file name, so buildTrack can lazily fetch the selected circuit only.
+const fileById: Record<string, string> = {};
 
 // Desired display order (by file slug base).
 const ORDER = [
@@ -80,29 +46,24 @@ const ORDER = [
 const baseSlug = (slug: string) => slug.replace(/-\d+[a-z]?$/, "");
 
 // circuits.json is the source of truth: it lists the available circuits and,
-// via `file`, which SVG each one uses (so e.g. Monza can switch to monza-7b.svg
-// without the old monza-7.svg also showing up).
-const svgByFile: Record<string, string> = {};
-for (const [path, raw] of Object.entries(svgRaw)) {
-  svgByFile[path.split("/").pop()!] = raw;
-}
-
+// via `file`, which SVG each one uses. Only metadata is built here (no SVG
+// parsing); the geometry is loaded lazily in buildTrack.
 const svgTracks: TrackDef[] = lapTimes
-  .map((entry): TrackDef | null => {
-    const raw = entry.file ? svgByFile[entry.file] : undefined;
-    if (!raw) return null;
+  .filter((e) => e.file && svgLoaders[`/circuits/${e.file}`])
+  .map((entry): TrackDef => {
+    const id = entry.file!.replace(/\.svg$/, "");
+    const scale = entry.scale ?? 1;
+    fileById[id] = entry.file!;
     return {
-      id: entry.file!.replace(/\.svg$/, ""),
+      id,
       name: entry.circuito,
       baseLapTime: entry.tempo_secondi,
-      width: 54,
-      svgPath: extractCenterlinePath(raw),
-      edges: extractEdges(raw),
-      startMarker: extractStartMarker(raw),
+      width: (entry.width ?? DEFAULT_WIDTH) * scale,
+      scale,
+      kerbScale: entry.kerbScale ?? 1,
       verso: entry.verso,
     };
   })
-  .filter((t): t is TrackDef => t !== null)
   .sort((a, b) => {
     const ia = ORDER.indexOf(baseSlug(a.id));
     const ib = ORDER.indexOf(baseSlug(b.id));
@@ -137,6 +98,17 @@ export function getTrackDef(id: string): TrackDef {
   return TRACKS.find((t) => t.id === id) ?? TRACKS[0];
 }
 
-export function buildTrack(id: string): Track {
-  return new Track(getTrackDef(id));
+/**
+ * Construct a track. SVG circuits fetch their (single) file lazily and parse it
+ * transform-aware (honoring `<g transform>`); hand-made tracks build from points.
+ */
+export async function buildTrack(id: string): Promise<Track> {
+  const def = getTrackDef(id);
+  const file = fileById[def.id];
+  if (!file) return new Track(def); // hand-made (oval): centerline from points
+  const raw = await svgLoaders[`/circuits/${file}`]();
+  const parsed = parseCircuitSvg(raw, SVG_SCALE);
+  const centerline = orientByVerso(parsed.centerline, def.verso);
+  const fullDef: TrackDef = { ...def, edgeLoops: parsed.loops, startWorld: parsed.start };
+  return new Track(fullDef, centerline);
 }
