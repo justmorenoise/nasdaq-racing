@@ -28,7 +28,9 @@
     "circuito": "Silverstone",
     "tempo_secondi": 89.337,
     "file": "silverstone-8b.svg",
-    "verso": "cw"
+    "verso": "cw",
+    "scale": 1,
+    "kerbScale": 1
   },
   {
     "circuito": "Spa-Francorchamps",

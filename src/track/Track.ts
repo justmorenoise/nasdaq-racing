@@ -90,6 +90,29 @@ export function buildCenterline(def: TrackDef): Pt[] {
 
 type Seg = [Pt, Pt];
 
+/** Shoelace area of a closed polyline (sign = winding). */
+function loopArea(loop: Pt[]): number {
+  let a = 0;
+  for (let i = 0; i < loop.length; i++) {
+    const j = (i + 1) % loop.length;
+    a += loop[i].x * loop[j].y - loop[j].x * loop[i].y;
+  }
+  return a / 2;
+}
+
+/** Even-odd ray cast: is (x,y) inside the closed polyline? */
+function pointInPolygon(loop: Pt[], x: number, y: number): boolean {
+  let inside = false;
+  for (let i = 0, j = loop.length - 1; i < loop.length; j = i++) {
+    const a = loop[i];
+    const b = loop[j];
+    if (a.y > y !== b.y > y && x < ((b.x - a.x) * (y - a.y)) / (b.y - a.y) + a.x) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
 /** Closed polyline → its segment list (including the wrap-around segment). */
 function loopSegments(loop: Pt[]): Seg[] {
   const segs: Seg[] = [];
@@ -139,6 +162,10 @@ export class Track {
   readonly edgeRight: Pt[] | null;
   /** Flattened segments of all edge loops, for ray queries (clearance checks). */
   private edgeSegments: Seg[] = [];
+  /** Per-sample flag: this station lies where the track overlaps itself (a
+   *  figure-8 crossover or near-touching passes). Renderers suppress edge
+   *  decorations (kerbs) here so they don't get drawn across the other pass. */
+  readonly nearSelf: boolean[];
 
   constructor(def: TrackDef, centerline: Pt[] = buildCenterline(def)) {
     this.def = def;
@@ -162,6 +189,44 @@ export class Track {
       this.edgeLeft = null;
       this.edgeRight = null;
     }
+    this.nearSelf = this.computeNearSelf();
+  }
+
+  /**
+   * Flag stations where the track overlaps itself: a sample whose space is within
+   * roughly a track-width of another sample far away in arc length (a figure-8
+   * crossover, or two passes nearly touching). Uses the local half-width so the
+   * threshold scales per circuit.
+   */
+  private computeNearSelf(): boolean[] {
+    const n = this.samples.length - 1;
+    const half = this.def.width / 2;
+    const hw: number[] = [];
+    for (let i = 0; i < n; i++) {
+      const s = this.samples[i];
+      if (this.edgeLeft) {
+        const l = this.edgeLeft[i];
+        const r = this.edgeRight![i];
+        hw[i] = (Math.hypot(l.x - s.x, l.y - s.y) + Math.hypot(r.x - s.x, r.y - s.y)) / 2;
+      } else {
+        hw[i] = half;
+      }
+    }
+    const flags = new Array<boolean>(n).fill(false);
+    const arcGap = this.length * 0.08; // ignore neighbours along the same pass
+    for (let i = 0; i < n; i++) {
+      const si = this.samples[i];
+      for (let j = 0; j < n; j++) {
+        const da = Math.abs(si.dist - this.samples[j].dist);
+        if (Math.min(da, this.length - da) < arcGap) continue;
+        const sj = this.samples[j];
+        if (Math.hypot(si.x - sj.x, si.y - sj.y) < (hw[i] + hw[j]) * 1.5) {
+          flags[i] = true;
+          break;
+        }
+      }
+    }
+    return flags;
   }
 
   /**
@@ -185,38 +250,46 @@ export class Track {
     const segs = loops.flatMap(loopSegments);
     this.edgeSegments = segs;
 
-    // First pass: raw casts on both sides, collecting hit distances.
-    const lh: (Pt | null)[] = [];
-    const rh: (Pt | null)[] = [];
-    const dists: number[] = [];
+    // Edge points lie along each sample's ± normal, so we work with their signed
+    // distances. Cast both sides (fall back to half-width when a ray misses).
+    const tL: number[] = [];
+    const tR: number[] = [];
+    const all: number[] = [];
     for (let i = 0; i < n; i++) {
       const s = this.samples[i];
       const l = castRay(segs, s.x, s.y, s.nx, s.ny);
       const r = castRay(segs, s.x, s.y, -s.nx, -s.ny);
-      lh.push(l);
-      rh.push(r);
-      if (l) dists.push(Math.hypot(l.x - s.x, l.y - s.y));
-      if (r) dists.push(Math.hypot(r.x - s.x, r.y - s.y));
+      const dl = l ? Math.hypot(l.x - s.x, l.y - s.y) : half;
+      const dr = r ? Math.hypot(r.x - s.x, r.y - s.y) : half;
+      tL.push(dl);
+      tR.push(dr);
+      if (l) all.push(dl);
+      if (r) all.push(dr);
     }
 
-    // A ray that slips through a gap (e.g. near the start/finish or a chicane
-    // where loops nearly meet) lands on a far edge, which would make kerbs and
-    // run-off jump across the track. Clamp any cast longer than a few times the
-    // median half-width back along its own normal.
-    dists.sort((a, b) => a - b);
-    const cap = (dists.length ? dists[dists.length >> 1] : half) * 3;
-    const clamp = (px: number, py: number, dx: number, dy: number, hit: Pt | null): Pt => {
-      if (!hit) return { x: px + dx * half, y: py + dy * half };
-      const t = Math.hypot(hit.x - px, hit.y - py);
-      return t > cap ? { x: px + dx * cap, y: py + dy * cap } : hit;
+    // A ray that slips through a gap (near the start/finish or a chicane where
+    // loops nearly meet) lands on a far edge — a short spike that would make
+    // kerbs, run-off and tire walls jump across the track. Cap overlong casts to
+    // a few times the median half-width, then a median-of-5 pass removes the
+    // remaining 1–2 sample spikes so the edge stays continuous.
+    all.sort((a, b) => a - b);
+    const cap = (all.length ? all[all.length >> 1] : half) * 3;
+    const smooth = (arr: number[]): number[] => {
+      const c = arr.map((v) => Math.min(v, cap));
+      return c.map((_, i) => {
+        const w = [-2, -1, 0, 1, 2].map((d) => c[(i + d + n) % n]).sort((a, b) => a - b);
+        return w[2];
+      });
     };
+    const sL = smooth(tL);
+    const sR = smooth(tR);
 
     const left: Pt[] = [];
     const right: Pt[] = [];
     for (let i = 0; i < n; i++) {
       const s = this.samples[i];
-      left.push(clamp(s.x, s.y, s.nx, s.ny, lh[i]));
-      right.push(clamp(s.x, s.y, -s.nx, -s.ny, rh[i]));
+      left.push({ x: s.x + s.nx * sL[i], y: s.y + s.ny * sL[i] });
+      right.push({ x: s.x - s.nx * sR[i], y: s.y - s.ny * sR[i] });
     }
     return { loops, left, right };
   }
@@ -229,6 +302,28 @@ export class Track {
   edgeRayDistance(px: number, py: number, dx: number, dy: number): number {
     const hit = castRay(this.edgeSegments, px, py, dx, dy);
     return hit ? Math.hypot(hit.x - px, hit.y - py) : Infinity;
+  }
+
+  private outerLoopCache?: Pt[];
+
+  /**
+   * Whether (x,y) lies on the asphalt ribbon: inside the outer edge loop and
+   * outside every inner island. Always false without real edges. Lets the
+   * renderers drop decorations (kerb cells, grandstands) that strayed onto the road.
+   */
+  onAsphalt(x: number, y: number): boolean {
+    if (!this.edgeLoops) return false;
+    if (!this.outerLoopCache) {
+      this.outerLoopCache = this.edgeLoops.reduce((a, b) =>
+        Math.abs(loopArea(a)) >= Math.abs(loopArea(b)) ? a : b,
+      );
+    }
+    const outer = this.outerLoopCache;
+    if (!pointInPolygon(outer, x, y)) return false;
+    for (const loop of this.edgeLoops) {
+      if (loop !== outer && pointInPolygon(loop, x, y)) return false;
+    }
+    return true;
   }
 
   /** Nearest centerline arc-length to the start/finish marker. */

@@ -116,7 +116,7 @@ export function grassVariationTexture(worldW: number, worldH: number): Texture {
   c.width = cw;
   c.height = ch;
   const ctx = c.getContext("2d")!;
-  const colors = ["#1f4527", "#21492a", "#346e3c", "#3c7e45", "#2a5e33", "#274f2e"];
+  const colors = ["#112616", "#1d4024", "#346e3c", "#5fa367", "#2a5e33", "#274f2e"];
   const blobs = Math.round((cw * ch) / (160 * 160));
   for (let i = 0; i < blobs; i++) {
     const x = Math.random() * cw;

@@ -16,6 +16,10 @@ export class Scenery {
   readonly container = new Container();
   private cx: number;
   private cy: number;
+  /** Sample indices occupied by the pit complex, and the side it sits on, so
+   *  grandstands can steer clear of the paddock. */
+  private pitWindow: Set<number> = new Set();
+  private pitSide = 0;
 
   constructor(
     private track: Track,
@@ -24,6 +28,11 @@ export class Scenery {
     const b = track.bounds;
     this.cx = (b.minX + b.maxX) / 2;
     this.cy = (b.minY + b.maxY) / 2;
+
+    const pw = this.windowAround(this.track.startDist, CONFIG.scenery.pitLaneLen / 2);
+    this.pitWindow = new Set(pw);
+    this.pitSide =
+      pw.length >= 3 ? -this.outwardSign(this.track.samples[pw[Math.floor(pw.length / 2)]]) : 0;
 
     this.container.addChild(this.grandstands());
     this.container.addChild(this.pitPaddock());
@@ -113,6 +122,7 @@ export class Scenery {
     const s = this.track.samples;
     const seatDepth = sc.standDepth * 0.62;
     const roofDepth = sc.standDepth * 0.18;
+    const footprint = sc.standGap + seatDepth + roofDepth + 12; // depth from the edge
     for (const straight of this.layout.straights) {
       if (this.runLength(straight.indices) < sc.standMinStraightFrac * this.track.length) {
         continue;
@@ -120,20 +130,42 @@ export class Scenery {
       for (const i of this.spaced(straight.indices, sc.standSegLen, sc.standSegLen * 0.5)) {
         const p = s[i];
         const out = this.outwardSign(p);
-        const ax = Math.cos(p.tangent);
-        const ay = Math.sin(p.tangent);
+        // Don't sit a stand on the paddock side of the start/finish line…
+        if (this.pitWindow.has(i) && out === this.pitSide) continue;
         const nx = p.nx * out;
         const ny = p.ny * out;
-        const front = this.half + sc.standGap;
-        // Slight per-stand size variation for variety.
+        // …or where its depth would reach onto another part of the track.
+        const e0 = this.edgeOffset(i, out, 0);
+        if (this.track.edgeRayDistance(e0.x, e0.y, nx, ny) < footprint) continue;
+
+        const ax = Math.cos(p.tangent);
+        const ay = Math.sin(p.tangent);
         const halfLen = sc.standSegLen * (0.4 + Math.random() * 0.08);
-        // Tarmac apron + front barrier, the seating bank, then a thin back roof.
-        this.rect(g, p.x + nx * (front - 5), p.y + ny * (front - 5), ax, ay, halfLen + 5, nx, ny, 5, 0x2b2f38);
-        const seatC = front + seatDepth / 2;
-        this.rect(g, p.x + nx * seatC, p.y + ny * seatC, ax, ay, halfLen, nx, ny, seatDepth / 2, 0x171b25);
-        this.scatterCrowd(g, p.x + nx * front, p.y + ny * front, ax, ay, halfLen, nx, ny, seatDepth);
-        const roofC = front + seatDepth + roofDepth / 2;
-        this.rect(g, p.x + nx * roofC, p.y + ny * roofC, ax, ay, halfLen + 3, nx, ny, roofDepth / 2, 0x39414f);
+        const at = (d: number) => this.edgeOffset(i, out, d);
+        // Skip if any footprint corner (near apron + far roof, at both ends) would
+        // land on the track — e.g. a stand whose end pokes into the next corner.
+        const alongHalf = halfLen + 5;
+        let onTrack = false;
+        for (const depth of [sc.standGap - 5, sc.standGap + seatDepth + roofDepth]) {
+          const c = this.edgeOffset(i, out, depth);
+          for (const sgn of [1, -1]) {
+            if (this.track.onAsphalt(c.x + ax * alongHalf * sgn, c.y + ay * alongHalf * sgn)) {
+              onTrack = true;
+            }
+          }
+        }
+        if (onTrack) continue;
+
+        // Tarmac apron + front barrier, the seating bank, then a thin back roof,
+        // all measured outward from the real track edge.
+        const apron = at(sc.standGap - 5);
+        this.rect(g, apron.x, apron.y, ax, ay, halfLen + 5, nx, ny, 5, 0x2b2f38);
+        const seat = at(sc.standGap + seatDepth / 2);
+        this.rect(g, seat.x, seat.y, ax, ay, halfLen, nx, ny, seatDepth / 2, 0x171b25);
+        const front = at(sc.standGap);
+        this.scatterCrowd(g, front.x, front.y, ax, ay, halfLen, nx, ny, seatDepth);
+        const roof = at(sc.standGap + seatDepth + roofDepth / 2);
+        this.rect(g, roof.x, roof.y, ax, ay, halfLen + 3, nx, ny, roofDepth / 2, 0x39414f);
       }
     }
     return g;
@@ -217,10 +249,11 @@ export class Scenery {
 
   /**
    * Pit lane, pit wall, garages (with a glass canopy) and a shallow paddock, as
-   * thin bands following the inside of the start/finish straight. All depths are
-   * measured from the real track edge and capped to the infield clearance (the
-   * distance to the next edge inward), so the complex stays by the finish line
-   * and never reaches across a narrow infield onto another part of the track.
+   * thin bands following the inside of the start/finish straight. Depths are
+   * measured from the real track edge and clamped **per sample** to the local
+   * infield clearance (distance to the next edge inward), so the complex shows at
+   * full depth along the open straight and simply tapers where the infield
+   * narrows — visible by the finish line yet never reaching onto the far track.
    */
   private pitPaddock(): Graphics {
     const g = new Graphics();
@@ -232,15 +265,21 @@ export class Scenery {
     const mid = s[win[Math.floor(win.length / 2)]];
     const inSign = -this.outwardSign(mid); // pit complex sits on the inside
 
-    // Available depth: nearest infield edge crossing across the window, with a
-    // margin so the complex never touches the far track.
-    let clearance = Infinity;
-    for (const i of win) {
+    // Inward clearance per window sample, smoothed so a stray grazing ray doesn't
+    // punch a false notch.
+    const raw = win.map((i) => {
       const inner = this.edgeOffset(i, inSign, 0);
-      const d = this.track.edgeRayDistance(inner.x, inner.y, inSign * s[i].nx, inSign * s[i].ny);
-      if (d < clearance) clearance = d;
-    }
-    const maxDepth = clearance === Infinity ? Infinity : Math.max(0, clearance - 8);
+      return this.track.edgeRayDistance(inner.x, inner.y, inSign * s[i].nx, inSign * s[i].ny);
+    });
+    const clr = raw.map((_, k) => {
+      const w: number[] = [];
+      for (let d = -2; d <= 2; d++) {
+        const j = k + d;
+        if (j >= 0 && j < raw.length) w.push(raw[j]);
+      }
+      w.sort((a, b) => a - b);
+      return w[w.length >> 1];
+    });
 
     // Depths from the edge, back (paddock) to front (pit lane).
     const laneInner = sc.pitLaneGap;
@@ -249,33 +288,63 @@ export class Scenery {
     const garOuter = garInner + sc.garageDepth;
     const padInner = garOuter + 3;
     const padOuter = padInner + sc.paddockDepth;
+    const margin = 8;
 
-    // Too tight for even a pit lane → skip the complex entirely.
-    if (laneOuter > maxDepth) return g;
+    // Longest contiguous sub-window whose clearance fits a given depth.
+    const longestRun = (depth: number): [number, number] => {
+      let best: [number, number] = [0, 0];
+      let start = -1;
+      for (let k = 0; k <= win.length; k++) {
+        const ok = k < win.length && clr[k] >= depth + margin;
+        if (ok && start < 0) start = k;
+        if (!ok && start >= 0) {
+          if (k - start > best[1] - best[0]) best = [start, k];
+          start = -1;
+        }
+      }
+      return best;
+    };
 
-    // Paddock slab (back), only the part that fits.
-    if (padInner < maxDepth) {
-      g.poly(this.bandPoly(win, inSign, padInner, Math.min(padOuter, maxDepth))).fill(0x232834);
+    // Pick the deepest complex that fits a long-enough stretch of the straight, and
+    // draw it at *uniform* depth there — a clean rectangle, never tapering into the
+    // grass. Drops to garage-only, then pit-lane-only, on tight infields.
+    const tiers: { depth: number; garage: boolean; paddock: boolean }[] = [
+      { depth: padOuter, garage: true, paddock: true },
+      { depth: garOuter, garage: true, paddock: false },
+      { depth: laneOuter, garage: false, paddock: false },
+    ];
+    let tier: (typeof tiers)[number] | null = null;
+    let sub: number[] = [];
+    for (const t of tiers) {
+      const [a, b] = longestRun(t.depth);
+      if (b - a >= 5) {
+        tier = t;
+        sub = win.slice(a, b);
+        break;
+      }
     }
+    if (!tier) return g; // no room for even a pit lane
 
-    // Garage building + door dividers + glass canopy, clamped to the clearance.
-    if (garInner < maxDepth) {
-      const gOut = Math.min(garOuter, maxDepth);
-      g.poly(this.bandPoly(win, inSign, garInner, gOut)).fill(0x2d323d);
-      for (let k = 0; k < win.length; k += 3) {
-        const a = this.edgeOffset(win[k], inSign, garInner);
-        const b = this.edgeOffset(win[k], inSign, gOut);
+    const inf = sub.map(() => Infinity);
+    // Back to front: paddock slab, garage building, glass canopy, pit lane.
+    if (tier.paddock) this.fillCappedBand(g, sub, inSign, padInner, padOuter, inf, 0x232834);
+    if (tier.garage) {
+      this.fillCappedBand(g, sub, inSign, garInner, garOuter, inf, 0x2d323d);
+      for (let k = 0; k < sub.length; k += 3) {
+        const a = this.edgeOffset(sub[k], inSign, garInner);
+        const b = this.edgeOffset(sub[k], inSign, garOuter);
         g.moveTo(a.x, a.y);
         g.lineTo(b.x, b.y);
       }
       g.stroke({ width: 1, color: 0x161a21, alpha: 0.7 });
-      const canopy = Math.min(garInner + sc.garageDepth * 0.5, maxDepth);
-      g.poly(this.bandPoly(win, inSign, garInner, canopy)).fill({ color: 0x9fc4e6, alpha: 0.22 });
+      this.fillCappedBand(g, sub, inSign, garInner, garInner + sc.garageDepth * 0.5, inf, {
+        color: 0x9fc4e6,
+        alpha: 0.22,
+      });
     }
-
     // Pit lane (paler asphalt) + the white pit wall line at the track side.
-    g.poly(this.bandPoly(win, inSign, laneInner, laneOuter)).fill(0x474c57);
-    this.edge(g, win, inSign, laneInner, 0xe8e8e8, 1.6);
+    this.fillCappedBand(g, sub, inSign, laneInner, laneOuter, inf, 0x474c57);
+    this.cappedEdge(g, sub, inSign, laneInner, inf, 0xe8e8e8, 1.6);
     return g;
   }
 
@@ -314,33 +383,53 @@ export class Scenery {
     return out;
   }
 
-  /** Ribbon polygon between two depths outside the edge, following the samples. */
-  private bandPoly(indices: number[], side: number, inner: number, outer: number): number[] {
-    const a: number[] = [];
-    const b: number[] = [];
-    for (const i of indices) {
-      const pi = this.edgeOffset(i, side, inner);
-      const po = this.edgeOffset(i, side, outer);
-      a.push(pi.x, pi.y);
-      b.push(po.x, po.y);
+  /**
+   * Fill a band between two depths outside the edge, with the outer depth clamped
+   * per sample to `caps[k]` (the local infield clearance). Drawn as one simple
+   * quad per segment rather than a single ribbon polygon, so a curving straight or
+   * a varying cap can never produce a self-intersecting outline (which rendered as
+   * jagged triangular artifacts).
+   */
+  private fillCappedBand(
+    g: Graphics,
+    indices: number[],
+    side: number,
+    inner: number,
+    outer: number,
+    caps: number[],
+    fill: number | { color: number; alpha: number },
+  ): void {
+    for (let k = 1; k < indices.length; k++) {
+      const o0 = Math.max(inner, Math.min(outer, caps[k - 1]));
+      const o1 = Math.max(inner, Math.min(outer, caps[k]));
+      const i0 = this.edgeOffset(indices[k - 1], side, inner);
+      const i1 = this.edgeOffset(indices[k], side, inner);
+      const p1 = this.edgeOffset(indices[k], side, o1);
+      const p0 = this.edgeOffset(indices[k - 1], side, o0);
+      g.poly([i0.x, i0.y, i1.x, i1.y, p1.x, p1.y, p0.x, p0.y]).fill(fill);
     }
-    const poly = a.slice();
-    for (let k = b.length - 2; k >= 0; k -= 2) poly.push(b[k], b[k + 1]);
-    return poly;
   }
 
-  private edge(
+  /** Pit-wall line at depth `off`, broken where the local clearance can't fit it. */
+  private cappedEdge(
     g: Graphics,
     indices: number[],
     side: number,
     off: number,
+    caps: number[],
     color: number,
     width: number,
   ): void {
+    let pen = false;
     indices.forEach((i, k) => {
+      if (caps[k] < off) {
+        pen = false;
+        return;
+      }
       const p = this.edgeOffset(i, side, off);
-      if (k === 0) g.moveTo(p.x, p.y);
+      if (!pen) g.moveTo(p.x, p.y);
       else g.lineTo(p.x, p.y);
+      pen = true;
     });
     g.stroke({ width, color });
   }

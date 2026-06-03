@@ -103,7 +103,7 @@ export const CONFIG = {
      *  near the finish line without ever reaching onto another part of the track. */
     pitLaneWidth: 14,
     pitLaneGap: 8, // gap between track edge and pit lane
-    pitLaneLen: 300, // length along the straight
+    pitLaneLen: 210, // length along the straight (short, to stay off the corners)
     garageDepth: 16, // garage building band depth
     paddockDepth: 26, // paddock band depth behind the garages
 

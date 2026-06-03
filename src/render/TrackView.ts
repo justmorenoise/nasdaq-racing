@@ -28,6 +28,28 @@ function polyArea(loop: Pt[]): number {
   return s / 2;
 }
 
+/** Resample a polyline into points evenly spaced `step` apart along its length. */
+function resampleByDistance(line: Pt[], step: number): Pt[] {
+  if (line.length < 2) return line.slice();
+  const out: Pt[] = [line[0]];
+  let acc = 0;
+  for (let i = 1; i < line.length; i++) {
+    let a = line[i - 1];
+    const b = line[i];
+    let seg = Math.hypot(b.x - a.x, b.y - a.y);
+    while (acc + seg >= step) {
+      const t = (step - acc) / seg;
+      const p = { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
+      out.push(p);
+      a = p;
+      seg = Math.hypot(b.x - a.x, b.y - a.y);
+      acc = 0;
+    }
+    acc += seg;
+  }
+  return out;
+}
+
 /** Even-odd ray cast: is (x,y) inside the closed polyline? */
 function pointInPoly(loop: Pt[], x: number, y: number): boolean {
   let inside = false;
@@ -230,40 +252,72 @@ export class TrackView {
     return loops.reduce((a, b) => (Math.abs(polyArea(a)) >= Math.abs(polyArea(b)) ? a : b));
   }
 
-  /** Sample indices along a run spaced ~`spacing` world units apart. */
-  private spacedAlong(indices: number[], spacing: number): number[] {
-    const s = this.track.samples;
-    const picks: number[] = [];
-    let acc = Infinity;
-    for (let j = 0; j < indices.length; j++) {
-      if (j > 0) {
-        acc += Math.hypot(
-          s[indices[j]].x - s[indices[j - 1]].x,
-          s[indices[j]].y - s[indices[j - 1]].y,
-        );
-      }
-      if (acc >= spacing) {
-        picks.push(indices[j]);
-        acc = 0;
-      }
-    }
-    return picks;
-  }
-
   /**
-   * Tire barriers lining corner run-offs: a packed row of tires placed just
-   * outside the real edge. Positions that fall inside the outer track boundary
-   * are dropped (so a barrier never gets drawn on the asphalt), which also breaks
-   * the wall into shorter groups; groups of fewer than 5 tires are skipped so no
-   * lone tire is ever drawn. Rendered under the asphalt as a final safety net.
+   * Tire barriers lining corner run-offs: a wall of touching tires along the
+   * outer edge of the gravel trap, kept to the central (apex) portion of each
+   * corner so the walls stay short and don't reach into a neighbouring corner.
+   * The barrier line is resampled by tire diameter so tires sit side by side with
+   * no gaps. Positions inside the outer track boundary, or too close to a barrier
+   * already placed for another corner, are dropped — so walls never land on the
+   * asphalt nor cross each other; groups shorter than 5 tires are skipped.
    */
   private tireWalls(): Graphics {
     const g = new Graphics();
     const sc = CONFIG.scenery;
     const r = sc.tireRadius;
     const outer = this.outerLoop();
-    for (const run of this.layout.runs) {
-      const outSign = -run.turnSign; // outside of the corner
+    const minSep = r * 2 * 1.6; // keep different corners' walls from crossing
+
+    // Pass 1: candidate tire centres per corner — the central span of each run,
+    // offset to the run-off's outer edge, evenly packed, and already off the
+    // asphalt. The barrier line is split where it jumps (an edge discontinuity)
+    // so it never knots back on itself.
+    const s = this.track.samples;
+    const runPts: Pt[][] = this.layout.runs.map((run) => {
+      const m = run.indices.length;
+      const idx = run.indices.slice(Math.floor(m * 0.25), Math.ceil(m * 0.75));
+      if (idx.length < 2) return [];
+      const line = idx.map((i) => this.bandPt(i, -run.turnSign, sc.tireGap));
+      const pts: Pt[] = [];
+      let sub: Pt[] = [line[0]];
+      const emit = () => {
+        for (const c of resampleByDistance(sub, r * 2)) {
+          if (!(outer && pointInPoly(outer, c.x, c.y))) pts.push(c);
+        }
+      };
+      for (let k = 1; k < line.length; k++) {
+        const jump = Math.hypot(line[k].x - line[k - 1].x, line[k].y - line[k - 1].y);
+        const step = Math.hypot(s[idx[k]].x - s[idx[k - 1]].x, s[idx[k]].y - s[idx[k - 1]].y);
+        if (jump > step * 3.5 + 1) {
+          emit();
+          sub = [];
+        }
+        sub.push(line[k]);
+      }
+      emit();
+      return pts;
+    });
+
+    // Pass 2: where two corners' walls come together, drop tires from *both* so
+    // they open a clean gap instead of tangling into a cross.
+    const keep = runPts.map((pts) => pts.map(() => true));
+    for (let a = 0; a < runPts.length; a++) {
+      for (let b = a + 1; b < runPts.length; b++) {
+        for (let i = 0; i < runPts[a].length; i++) {
+          for (let j = 0; j < runPts[b].length; j++) {
+            const p = runPts[a][i];
+            const q = runPts[b][j];
+            if (Math.hypot(p.x - q.x, p.y - q.y) < minSep) {
+              keep[a][i] = false;
+              keep[b][j] = false;
+            }
+          }
+        }
+      }
+    }
+
+    // Pass 3: draw the surviving tires in contiguous groups of at least 5.
+    for (let a = 0; a < runPts.length; a++) {
       let group: Pt[] = [];
       const flush = () => {
         if (group.length >= 5) {
@@ -274,14 +328,7 @@ export class TrackView {
         }
         group = [];
       };
-      for (const i of this.spacedAlong(run.indices, sc.tireSpacing)) {
-        const c = this.bandPt(i, outSign, sc.tireGap);
-        if (outer && pointInPoly(outer, c.x, c.y)) {
-          flush(); // stray onto the track → break the group here
-          continue;
-        }
-        group.push(c);
-      }
+      runPts[a].forEach((c, i) => (keep[a][i] ? group.push(c) : flush()));
       flush();
     }
     return g;
@@ -294,15 +341,23 @@ export class TrackView {
    */
   private edgeLines(): Graphics {
     const g = new Graphics();
+    const s = this.track.samples;
     for (const straight of this.layout.straights) {
       const idx = straight.indices;
       if (idx.length < 2) continue;
       for (const side of [1, -1]) {
-        const p0 = this.bandPt(idx[0], side, -1.5);
-        g.moveTo(p0.x, p0.y);
-        for (let k = 1; k < idx.length; k++) {
+        // Lift the pen where the edge jumps so the line never darts across the road.
+        let pen = false;
+        for (let k = 0; k < idx.length; k++) {
           const p = this.bandPt(idx[k], side, -1.5);
-          g.lineTo(p.x, p.y);
+          if (k > 0) {
+            const jump = Math.hypot(p.x - this.bandPt(idx[k - 1], side, -1.5).x, p.y - this.bandPt(idx[k - 1], side, -1.5).y);
+            const step = Math.hypot(s[idx[k]].x - s[idx[k - 1]].x, s[idx[k]].y - s[idx[k - 1]].y);
+            if (jump > step * 3.5 + 1) pen = false;
+          }
+          if (pen) g.lineTo(p.x, p.y);
+          else g.moveTo(p.x, p.y);
+          pen = true;
         }
       }
     }
@@ -313,13 +368,33 @@ export class TrackView {
   private kerbs(): Graphics {
     const g = new Graphics();
     for (const run of this.layout.runs) {
-      // Inside through entry + apex, then outside through the exit.
-      const inside = run.indices.slice(0, run.apexEnd + 1);
+      // Inside kerb runs the full arc of the corner (so hairpins are fully lined);
+      // the outside kerb marks the exit only. Split each strip at self-overlap
+      // stations so a kerb is never drawn across the other pass at a crossover
+      // (e.g. Suzuka's figure-8).
+      const inside = run.indices;
       const outside = run.indices.slice(run.apexEnd);
-      this.kerbStrip(g, inside, run.turnSign);
-      this.kerbStrip(g, outside, -run.turnSign);
+      for (const seg of this.splitAtCrossings(inside)) this.kerbStrip(g, seg, run.turnSign);
+      for (const seg of this.splitAtCrossings(outside)) this.kerbStrip(g, seg, -run.turnSign);
     }
     return g;
+  }
+
+  /** Break an index list into runs that exclude self-overlap (crossover) stations. */
+  private splitAtCrossings(indices: number[]): number[][] {
+    const ns = this.track.nearSelf;
+    const out: number[][] = [];
+    let cur: number[] = [];
+    for (const i of indices) {
+      if (ns[i]) {
+        if (cur.length) out.push(cur);
+        cur = [];
+      } else {
+        cur.push(i);
+      }
+    }
+    if (cur.length) out.push(cur);
+    return out;
   }
 
   /**
@@ -333,9 +408,34 @@ export class TrackView {
     const ks = this.track.def.kerbScale ?? 1;
     const w = CONFIG.scenery.kerbWidth * ks;
     const cell = CONFIG.scenery.kerbCellLen * ks;
+    const s = this.track.samples;
+    // Split where the kerb rail jumps far beyond the centerline step (an edge
+    // discontinuity from a ray that grazed a far boundary), so no single cell is
+    // ever stretched across the track.
+    const rail = indices.map((i) => this.bandPt(i, side, w * 0.2));
+    let seg: number[] = [indices[0]];
+    for (let k = 1; k < indices.length; k++) {
+      const jump = Math.hypot(rail[k].x - rail[k - 1].x, rail[k].y - rail[k - 1].y);
+      const step = Math.hypot(
+        s[indices[k]].x - s[indices[k - 1]].x,
+        s[indices[k]].y - s[indices[k - 1]].y,
+      );
+      if (jump > step * 3.5 + 1) {
+        this.drawKerbCells(g, seg, side, w, cell);
+        seg = [];
+      }
+      seg.push(indices[k]);
+    }
+    this.drawKerbCells(g, seg, side, w, cell);
+  }
+
+  /** Lay alternating red/white cells along one kerb segment (no discontinuities). */
+  private drawKerbCells(g: Graphics, indices: number[], side: number, w: number, cell: number): void {
+    if (indices.length < 2) return;
     const inner = indices.map((i) => this.bandPt(i, side, -w * 0.3)); // toward track
     const outer = indices.map((i) => this.bandPt(i, side, w * 0.7)); // toward run-off
     const mid = indices.map((i) => this.bandPt(i, side, w * 0.2)); // length reference
+    const probe = indices.map((i) => this.bandPt(i, side, w)); // just past the outer rail
 
     const cum = [0];
     for (let k = 1; k < mid.length; k++) {
@@ -344,13 +444,17 @@ export class TrackView {
     const total = cum[cum.length - 1];
     if (total < 1e-3) return;
 
-    // Inner/outer rail point at a given arc length along the kerb.
+    // Inner/outer/probe rail point at a given arc length along the kerb.
     const at = (arc: number) => {
       let k = 1;
       while (k < cum.length - 1 && cum[k] < arc) k++;
       const t = (arc - cum[k - 1]) / (cum[k] - cum[k - 1] || 1);
       const lerp = (p: Pt, q: Pt) => ({ x: p.x + (q.x - p.x) * t, y: p.y + (q.y - p.y) * t });
-      return { inner: lerp(inner[k - 1], inner[k]), outer: lerp(outer[k - 1], outer[k]) };
+      return {
+        inner: lerp(inner[k - 1], inner[k]),
+        outer: lerp(outer[k - 1], outer[k]),
+        probe: lerp(probe[k - 1], probe[k]),
+      };
     };
 
     let pos = 0;
@@ -358,16 +462,27 @@ export class TrackView {
     while (pos < total - 1e-3) {
       const a = at(pos);
       const b = at(Math.min(pos + cell, total));
-      const color = idx % 2 === 0 ? 0xd21f1f : 0xf2f2f2;
-      g.poly([
-        a.inner.x, a.inner.y,
-        b.inner.x, b.inner.y,
-        b.outer.x, b.outer.y,
-        a.outer.x, a.outer.y,
-      ]).fill(color);
+      // Skip a cell that sits on the asphalt (a kerb landing mid-track where the
+      // edge wanders at fast esses): its outer probe should be off the road.
+      const mx = (a.probe.x + b.probe.x) / 2;
+      const my = (a.probe.y + b.probe.y) / 2;
+      if (!this.onAsphalt(mx, my)) {
+        const color = idx % 2 === 0 ? 0xd21f1f : 0xf2f2f2;
+        g.poly([
+          a.inner.x, a.inner.y,
+          b.inner.x, b.inner.y,
+          b.outer.x, b.outer.y,
+          a.outer.x, a.outer.y,
+        ]).fill(color);
+      }
       pos += cell;
       idx++;
     }
+  }
+
+  /** True if (x,y) is on the asphalt ribbon — drops kerb cells that strayed there. */
+  private onAsphalt(x: number, y: number): boolean {
+    return this.track.onAsphalt(x, y);
   }
 
   private centerLine(): Graphics {
