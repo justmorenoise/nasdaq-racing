@@ -1,4 +1,4 @@
-import { Container, Graphics, Sprite } from "pixi.js";
+import { Container, Graphics } from "pixi.js";
 import { CONFIG } from "../config";
 import type { Track } from "../track/Track";
 import type { Pt } from "../track/centerline";
@@ -6,7 +6,7 @@ import { offsetPoint, type TrackLayout } from "../track/corners";
 import {
   asphaltTexture,
   grassTexture,
-  grassVariationTexture,
+  grassBackgroundTexture,
   gravelTexture,
   pattern,
 } from "./textures";
@@ -124,20 +124,29 @@ export class TrackView {
   private grassBackground(): Container {
     const c = new Container();
     const b = this.track.bounds;
-    const m = CONFIG.scenery.grassMargin;
+    // Extend the grass well past the track so it always fills the viewport (even
+    // letterboxed at full-zoom on wide screens), never showing the dark stage.
+    const spanX = b.maxX - b.minX;
+    const spanY = b.maxY - b.minY;
+    const m = Math.max(spanX, spanY) + CONFIG.scenery.grassMargin;
     const x = b.minX - m;
     const y = b.minY - m;
-    const w = b.maxX - b.minX + 2 * m;
-    const h = b.maxY - b.minY + 2 * m;
+    const w = spanX + 2 * m;
+    const h = spanY + 2 * m;
     // Fine tiled blades …
     const base = new Graphics();
-    base.rect(x, y, w, h).fill(pattern("grass", grassTexture(), CONFIG.scenery.grassTile));
+    const textureGrassHF = grassTexture();
+    console.log(`TrackView.grassBackground - textureGrassHF`, textureGrassHF);
+    base.rect(x, y, w, h).fill(pattern("grass", textureGrassHF, CONFIG.scenery.grassTile));
     c.addChild(base);
-    // … plus a single non-repeating tonal overlay stretched over the whole area.
-    const variation = new Sprite(grassVariationTexture(w, h));
-    variation.position.set(x, y);
-    variation.width = w;
-    variation.height = h;
+    // … plus the hand-made grass image, tiled across the whole area.
+    const variation = new Graphics();
+    const textureGrassBig = grassBackgroundTexture();
+    console.log(`TrackView.grassBackground - textureGrassBig`,textureGrassBig);
+    variation
+      .rect(x, y, w, h)
+      .fill(pattern("grassBg", textureGrassBig, CONFIG.scenery.grassBgTile));
+    variation.alpha = 0.75;
     c.addChild(variation);
     return c;
   }
@@ -189,11 +198,13 @@ export class TrackView {
         (a, b) => Math.abs(polyArea(b)) - Math.abs(polyArea(a)),
       );
       const [outer, ...inner] = loops;
-      const grass = pattern("grass", grassTexture(), CONFIG.scenery.grassTile);
       const seam = { width: 3, color: 0x10141c, alpha: 0.9, join: "round" } as const;
       const g = new Graphics();
+      // Cut the infield islands out of the asphalt rather than repainting them
+      // with tiled grass: the grass background (incl. the bg.jpg overlay) shows
+      // through, so the infield matches the outer field and never tiles visibly.
       g.poly(flat(outer)).fill(fill);
-      for (const hole of inner) g.poly(flat(hole)).fill(grass);
+      for (const hole of inner) g.poly(flat(hole)).cut();
       // Crisp dark seam on every boundary.
       g.poly(flat(outer)).stroke(seam);
       for (const hole of inner) g.poly(flat(hole)).stroke(seam);

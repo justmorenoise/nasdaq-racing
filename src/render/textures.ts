@@ -1,4 +1,5 @@
-import { FillPattern, Matrix, Texture } from "pixi.js";
+import { Assets, FillPattern, Matrix, Texture } from "pixi.js";
+import bgUrl from "../../circuits/bg.jpg?url";
 
 /**
  * Procedural, seamlessly-tiling surface textures (asphalt, grass, gravel) and a
@@ -42,13 +43,6 @@ function fillNoise(
     }
   }
   ctx.globalAlpha = 1;
-}
-
-function hexToRgba(hexColor: string, a: number): string {
-  const r = parseInt(hexColor.slice(1, 3), 16);
-  const g = parseInt(hexColor.slice(3, 5), 16);
-  const b = parseInt(hexColor.slice(5, 7), 16);
-  return `rgba(${r},${g},${b},${a})`;
 }
 
 function makeTexture(
@@ -103,38 +97,26 @@ export function grassTexture(): Texture {
   );
 }
 
+let grassBg: Texture | null = null;
+
 /**
- * A single large, NON-repeating tonal overlay sized to the whole grass area
- * (drawn once, stretched over the bounds). Soft green blobs break up the
- * tiled-blade texture so the grass never looks like an obvious repeat.
+ * Preload the grass background image (`/circuits/bg.jpg`). Call once during
+ * boot, before any TrackView is built, so `grassBackgroundTexture()` can return
+ * the ready texture synchronously.
  */
-export function grassVariationTexture(worldW: number, worldH: number): Texture {
-  const scale = 1024 / Math.max(worldW, worldH);
-  const cw = Math.max(4, Math.round(worldW * scale));
-  const ch = Math.max(4, Math.round(worldH * scale));
-  const c = document.createElement("canvas");
-  c.width = cw;
-  c.height = ch;
-  const ctx = c.getContext("2d")!;
-  const colors = ["#112616", "#1d4024", "#346e3c", "#5fa367", "#2a5e33", "#274f2e"];
-  const blobs = Math.round((cw * ch) / (160 * 160));
-  for (let i = 0; i < blobs; i++) {
-    const x = Math.random() * cw;
-    const y = Math.random() * ch;
-    const rad = (60 + Math.random() * 200) * scale;
-    const color = colors[(Math.random() * colors.length) | 0];
-    const alpha = 0.1 + Math.random() * 0.16;
-    const grad = ctx.createRadialGradient(x, y, 0, x, y, rad);
-    grad.addColorStop(0, hexToRgba(color, alpha));
-    grad.addColorStop(1, hexToRgba(color, 0));
-    ctx.fillStyle = grad;
-    ctx.beginPath();
-    ctx.arc(x, y, rad, 0, Math.PI * 2);
-    ctx.fill();
-  }
-  const tex = Texture.from(c);
+export async function loadGrassBackground(): Promise<void> {
+  const tex: Texture = await Assets.load(bgUrl);
   tex.source.scaleMode = "linear";
-  return tex;
+  tex.source.addressMode = "repeat"; // tiled across the whole field
+  grassBg = tex;
+}
+
+/**
+ * The hand-made grass texture (`bg.jpg`), tiled (repeat) across the whole grass
+ * area as a tonal overlay — replaces the old procedural tonal blobs.
+ */
+export function grassBackgroundTexture(): Texture {
+  return grassBg ?? Texture.WHITE;
 }
 
 export function gravelTexture(): Texture {

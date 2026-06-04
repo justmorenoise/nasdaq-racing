@@ -3,6 +3,7 @@ import { Application, Container } from "pixi.js";
 import { buildTrack, DEFAULT_TRACK_ID, TRACKS } from "./track/tracks";
 import { computeLayout } from "./track/corners";
 import { TrackView } from "./render/TrackView";
+import { loadGrassBackground } from "./render/textures";
 import { Scenery } from "./render/Scenery";
 import { CarView } from "./render/CarView";
 import { Camera } from "./render/Camera";
@@ -56,6 +57,7 @@ async function boot() {
   app.stage.addChild(world);
 
   const track = await buildTrack(trackId);
+  await loadGrassBackground();
   const layout = computeLayout(track);
   world.addChild(new TrackView(track, layout).container);
   world.addChild(new Scenery(track, layout).container);
