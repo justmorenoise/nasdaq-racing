@@ -1,5 +1,6 @@
 import type { Car } from "../sim/Car";
 import type { ClockSample } from "../sim/RaceClock";
+import { affiliateUrl, affiliateEnabled, AFFILIATE_REL } from "../affiliate";
 
 function hms(seconds: number): string {
   const s = Math.floor(seconds);
@@ -61,22 +62,35 @@ export class RaceHud {
         const sign = car.changePct >= 0 ? "+" : "";
         const cls = car.changePct >= 0 ? "up" : "down";
         const color = `#${car.color.toString(16).padStart(6, "0")}`;
-        return `<button class="podium-row" data-sym="${car.symbol}">
+        return `<div class="podium-row" data-sym="${car.symbol}">
           <span class="podium-medal">${medals[i]}</span>
           <span class="podium-chip" style="background:${color}"></span>
           <span class="podium-sym">${car.symbol}</span>
           <span class="podium-laps">${laps} giri</span>
           <span class="podium-pct ${cls}">${sign}${car.changePct.toFixed(2)}%</span>
-        </button>`;
+          ${
+            affiliateEnabled
+              ? `<a class="podium-invest" href="${affiliateUrl(car.symbol)}" target="_blank" rel="${AFFILIATE_REL}">Investi su ${car.symbol} ↗</a>`
+              : ""
+          }
+        </div>`;
       })
       .join("");
+    const disclaimer = affiliateEnabled
+      ? `<div class="podium-disclaimer">Link sponsorizzati. Le azioni/CFD comportano rischi. Non è consulenza finanziaria.</div>`
+      : "";
     this.podium.innerHTML = `
       <div class="podium-card">
         <div class="podium-title">🏁 RISULTATO DI GIORNATA</div>
         ${rows}
+        ${disclaimer}
       </div>`;
-    this.podium.querySelectorAll<HTMLButtonElement>(".podium-row").forEach((b) =>
+    this.podium.querySelectorAll<HTMLElement>(".podium-row").forEach((b) =>
       b.addEventListener("click", () => this.onSelect(b.dataset.sym!)),
+    );
+    // The affiliate link opens the broker; don't let it trigger the row's chase.
+    this.podium.querySelectorAll<HTMLElement>(".podium-invest").forEach((a) =>
+      a.addEventListener("click", (e) => e.stopPropagation()),
     );
     this.podium.classList.remove("hidden");
   }

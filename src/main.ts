@@ -20,19 +20,27 @@ import { BattleBar } from "./ui/BattleBar";
 import { detectBattles } from "./sim/battles";
 import { RaceClock } from "./sim/RaceClock";
 import { RaceHud } from "./ui/RaceHud";
+import { affiliateUrl, affiliateEnabled, AFFILIATE_REL } from "./affiliate";
 
 async function boot() {
   const host = document.getElementById("app")!;
 
+  // The canvas + DOM overlay live in a stage wrapper. On desktop it fills the
+  // screen; on mobile it becomes a fixed, collapsing header (see applyLayout)
+  // so the leaderboard can scroll below it. The renderer tracks the wrapper.
+  const stageWrap = document.createElement("div");
+  stageWrap.className = "stage-wrap";
+  host.appendChild(stageWrap);
+
   const app = new Application();
   await app.init({
     background: "#0a0e14",
-    resizeTo: host,
+    resizeTo: stageWrap,
     antialias: true,
     autoDensity: true,
     resolution: Math.min(window.devicePixelRatio || 1, 2),
   });
-  host.appendChild(app.canvas);
+  stageWrap.appendChild(app.canvas);
 
   const params = new URLSearchParams(location.search);
   // Dev-only time acceleration: ?speed=10 makes a lap take 1/10th the time.
@@ -71,6 +79,17 @@ async function boot() {
   const model = new RaceModel(track, DEFAULT_SYMBOLS);
   const camera = new Camera(world, track, model, app.screen);
 
+  let directorOn = false;
+  // Picking a car (on track or in the standings) is the user taking manual
+  // control, so the auto-director must step aside.
+  const followManually = (sym: string) => {
+    if (directorOn) {
+      directorOn = false;
+      controls.setDirector(false);
+    }
+    camera.toggleFollow(sym);
+  };
+
   const carViews = new Map<string, CarView>();
   const syncCarViews = () => {
     for (const [sym, car] of model.cars) {
@@ -78,7 +97,7 @@ async function boot() {
       const view = new CarView(car, labelLayer, track.def.scale ?? 1);
       view.root.eventMode = "static";
       view.root.cursor = "pointer";
-      view.root.on("pointertap", () => camera.toggleFollow(sym));
+      view.root.on("pointertap", () => followManually(sym));
       carViews.set(sym, view);
       carLayer.addChild(view.root);
     }
@@ -109,26 +128,26 @@ async function boot() {
   // --- UI overlay (DOM) ---
   const overlay = document.createElement("div");
   overlay.className = "ui-overlay";
-  host.appendChild(overlay);
+  stageWrap.appendChild(overlay);
 
   let activeSymbols = [...DEFAULT_SYMBOLS];
-  const leaderboard = new Leaderboard((sym) => camera.toggleFollow(sym));
+  const leaderboard = new Leaderboard((sym) => followManually(sym));
   const selector = new StockSelector(activeSymbols, (syms) => {
     activeSymbols = syms;
     model.setSymbols(syms);
     feed.start(syms);
     syncCarViews();
   });
-  let directorOn = false;
   let labelsOn = true;
   const controls = new Controls({
     onFullView: () => {
       directorOn = false;
+      controls.setDirector(false);
       camera.showFull();
     },
     onToggleSelector: () => selector.toggle(),
-    onToggleDirector: () => {
-      directorOn = !directorOn;
+    onToggleDirector: (on) => {
+      directorOn = on;
     },
     onToggleLabels: (on) => {
       labelsOn = on;
@@ -143,15 +162,93 @@ async function boot() {
   });
   const battleBar = new BattleBar((sym) => camera.follow(sym));
   const raceHud = new RaceHud(track.length, (sym) => camera.follow(sym));
+  // Leaderboard placement is layout-dependent (see applyLayout below): an
+  // absolute overlay panel on desktop, an in-flow block under the circuit on
+  // mobile, so the rest goes in the overlay here.
   overlay.append(
     controls.el,
     battleBar.el,
-    leaderboard.el,
     selector.el,
     raceHud.status,
     raceHud.chaseInfo,
     raceHud.podium,
   );
+
+  // Persistent compliance note for the sponsored affiliate CTAs.
+  if (affiliateEnabled) {
+    const disclaimer = document.createElement("div");
+    disclaimer.className = "disclaimer";
+    disclaimer.textContent =
+      "I link a eToro sono sponsorizzati. Le azioni/CFD comportano rischi di perdita del capitale. Non è consulenza finanziaria.";
+    overlay.append(disclaimer);
+  }
+
+  // --- Mobile layout: circuit as a collapsing sticky header + scrollable board.
+  // On phones the page scrolls. The stage is fixed at the top and shrinks from
+  // its initial tall size to 33vh as the user scrolls, then stays pinned; the
+  // leaderboard sits in normal flow below it (full width, all positions). At
+  // rest the stage is tall enough to leave only the top ~3 rows peeking.
+  const mq = window.matchMedia("(max-width: 640px)");
+  const STAGE_MIN_FRAC = 0.33;
+  const spacer = document.createElement("div");
+  spacer.className = "stage-spacer";
+  // True once the mobile circuit is shrunk to its minimum: we then declutter it
+  // (hide car labels and the floating chips) so it reads as a clean thumbnail.
+  let stageCollapsed = false;
+
+  // Height of the leaderboard header + first three rows, so the resting stage
+  // height can leave exactly that much peeking at the bottom.
+  const peekHeight = (): number => {
+    const header = leaderboard.el.querySelector(".lb-toggle") as HTMLElement | null;
+    const rows = leaderboard.el.querySelectorAll<HTMLElement>(".lb-row");
+    let h = header?.offsetHeight ?? 32;
+    for (let i = 0; i < Math.min(3, rows.length); i++) h += rows[i].offsetHeight;
+    return h + 12;
+  };
+
+  const updateStage = () => {
+    if (!mq.matches) return;
+    const vh = window.innerHeight;
+    const hMin = Math.round(vh * STAGE_MIN_FRAC);
+    // Constant reserved space so the document height is stable while scrolling;
+    // keep the resting circuit at least 45vh tall even on short viewports.
+    const h0 = Math.max(Math.round(vh * 0.45), vh - peekHeight());
+    spacer.style.height = `${h0}px`;
+    const h = Math.max(hMin, h0 - host.scrollTop);
+    if (Math.round(stageWrap.clientHeight) !== h) {
+      stageWrap.style.height = `${h}px`;
+      // Resize the renderer now rather than waiting for Pixi's rAF-based
+      // ResizeObserver, so the circuit reframes in lock-step with the scroll.
+      app.resize();
+    }
+    const collapsed = h <= hMin + 2;
+    if (collapsed !== stageCollapsed) {
+      stageCollapsed = collapsed;
+      stageWrap.classList.toggle("stage-collapsed", collapsed);
+    }
+  };
+
+  const applyLayout = () => {
+    if (mq.matches) {
+      leaderboard.el.classList.add("mobile-board");
+      leaderboard.el.classList.remove("collapsed");
+      if (spacer.parentElement !== host) host.appendChild(spacer);
+      if (leaderboard.el.parentElement !== host) host.appendChild(leaderboard.el);
+      host.scrollTop = 0;
+      updateStage();
+    } else {
+      leaderboard.el.classList.remove("mobile-board");
+      spacer.remove();
+      if (leaderboard.el.parentElement !== overlay) overlay.appendChild(leaderboard.el);
+      stageWrap.style.height = "";
+      stageCollapsed = false;
+      stageWrap.classList.remove("stage-collapsed");
+    }
+  };
+  applyLayout();
+  mq.addEventListener("change", applyLayout);
+  host.addEventListener("scroll", updateStage, { passive: true });
+  window.addEventListener("resize", updateStage);
 
   app.renderer.on("resize", () => {
     camera.resize();
@@ -196,6 +293,11 @@ async function boot() {
         leaderSym = car.symbol;
       }
     }
+    // Labels follow the global toggle, but are suppressed on the shrunken mobile
+    // thumbnail where they'd be oversized and overlap.
+    const showLabels = labelsOn && !stageCollapsed;
+    // Shrink the P1 ring on the reduced mobile circuit so it doesn't dominate.
+    const ringScale = stageCollapsed ? 0.5 : 1;
     for (const [sym, car] of model.cars) {
       // Boost glow decays in real time (independent of sim time-scale).
       if (car.boost > 0) car.boost = Math.max(0, car.boost - dt * 1.1);
@@ -203,7 +305,7 @@ async function boot() {
       // pack never hide behind another car).
       carViews
         .get(sym)
-        ?.update(model.poseForCar(car), labelScale, labelsOn, sym === leaderSym);
+        ?.update(model.poseForCar(car), labelScale, showLabels, sym === leaderSym, ringScale);
     }
     minimap.update(camera.followedSymbol);
 
@@ -217,6 +319,8 @@ async function boot() {
         (a, b) => b.changePct - a.changePct,
       );
       leaderboard.update(byPct, camera.followedSymbol);
+      // Keep the mobile circuit's resting height in sync with the row heights.
+      updateStage();
       const battles = detectBattles(model.cars.values(), track);
       battleBar.update(battles);
       raceHud.setStatus(clk);
@@ -233,8 +337,12 @@ async function boot() {
         const toAhead = ahead
           ? `+${gapSeconds(ahead.progress - car.progress).toFixed(1)}s ${ahead.symbol}`
           : "in testa";
+        const investLink = affiliateEnabled
+          ? ` · <a class="chase-invest" href="${affiliateUrl(car.symbol)}" target="_blank" rel="${AFFILIATE_REL}">Investi ↗</a>`
+          : "";
         raceHud.setChaseInfo(
-          `<b>P${pos + 1}</b> ${car.symbol} · dal leader <b>${toLeader}</b> · ${toAhead}`,
+          `<b>P${pos + 1}</b> ${car.symbol} · dal leader <b>${toLeader}</b> · ${toAhead}` +
+            investLink,
         );
       } else {
         raceHud.setChaseInfo(null);

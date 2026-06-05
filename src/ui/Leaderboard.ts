@@ -1,4 +1,5 @@
 import type { Car } from "../sim/Car";
+import { affiliateUrl, affiliateEnabled, AFFILIATE_REL } from "../affiliate";
 
 interface Row {
   el: HTMLElement;
@@ -32,10 +33,15 @@ export class Leaderboard {
   private list = document.createElement("div");
   private rows = new Map<string, Row>();
 
+  // Class set in the constructor so the collapse rule (`.collapsed .list`) and
+  // the scroll rule both match this element.
+
   constructor(private onSelect: (symbol: string) => void) {
     this.el.className = "panel leaderboard";
+    this.list.className = "list";
     const title = document.createElement("button");
     title.className = "panel-title lb-toggle";
+    title.title = "Comprimi/espandi la classifica";
     const caret = document.createElement("span");
     caret.className = "lb-caret";
     const label = document.createElement("span");
@@ -45,8 +51,6 @@ export class Leaderboard {
       this.el.classList.toggle("collapsed"),
     );
     this.el.append(title, this.list);
-    // Start collapsed on narrow screens to keep the track visible.
-    if (window.innerWidth < 640) this.el.classList.add("collapsed");
   }
 
   private ensureRow(car: Car): Row {
@@ -76,6 +80,19 @@ export class Leaderboard {
     deltaEl.className = "lb-delta";
 
     el.append(posEl, chip, main, deltaEl);
+
+    if (affiliateEnabled) {
+      const invest = document.createElement("a");
+      invest.className = "lb-invest";
+      invest.textContent = "↗";
+      invest.href = affiliateUrl(car.symbol);
+      invest.target = "_blank";
+      invest.rel = AFFILIATE_REL;
+      invest.title = `Investi su ${car.symbol}`;
+      // Keep the affiliate click separate from the row's chase action.
+      invest.addEventListener("click", (e) => e.stopPropagation());
+      el.append(invest);
+    }
     row = { el, posEl, priceEl, deltaEl };
     this.rows.set(car.symbol, row);
     return row;

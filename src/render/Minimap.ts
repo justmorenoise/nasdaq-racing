@@ -68,8 +68,12 @@ export class Minimap {
     }
   }
 
-  /** Place in the top-right corner given the screen size. */
+  /** Place in the top-right corner given the screen size. Shrinks on narrow
+   * (mobile) screens so it leaves room for the controls and stays fully on-screen. */
   layout(screenW: number): void {
-    this.container.position.set(screenW - W - 16, 16);
+    const s = screenW < 640 ? 0.62 : 1;
+    this.container.scale.set(s);
+    const margin = screenW < 640 ? 10 : 16;
+    this.container.position.set(screenW - W * s - margin, margin);
   }
 }

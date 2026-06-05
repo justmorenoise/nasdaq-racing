@@ -6,6 +6,14 @@ export const CONFIG = {
   /** Daily % change is clamped to this band before mapping to lap time. */
   changePctClamp: 8,
 
+  /**
+   * Broker affiliate CTAs (the "Investi" links/buttons and every eToro
+   * reference added on top of the viewer). Set to `false` to hide all of them
+   * — leaderboard ↗ buttons, podium "Investi" pills, the global "Apri conto"
+   * button, the chase-cam link and the compliance disclaimer.
+   */
+  affiliateEnabled: false,
+
   /** Lateral offset easing for overtakes (1/seconds). */
   laneEaseRate: 2.5,
 

@@ -35,6 +35,13 @@ body,
   position: relative;
 }
 
+/* Holds the canvas + DOM overlay. Fills the screen on desktop; becomes a fixed,
+   collapsing header on mobile (see the max-width media query). */
+.stage-wrap {
+  position: absolute;
+  inset: 0;
+}
+
 canvas {
   display: block;
 }
@@ -133,10 +140,23 @@ canvas {
   border-color: var(--accent);
   color: var(--accent);
 }
+.btn-label {
+  margin-left: 6px;
+}
 .btn.select {
   -webkit-appearance: none;
   appearance: none;
   padding-right: 14px;
+}
+.btn.invest {
+  text-decoration: none;
+  color: #1a1206;
+  background: linear-gradient(180deg, #ffd23f, #f5a623);
+  border-color: transparent;
+}
+.btn.invest:hover {
+  border-color: transparent;
+  filter: brightness(1.05);
 }
 
 /* Chase-cam broadcast gap readout */
@@ -160,6 +180,14 @@ canvas {
 }
 .chase-info b {
   color: var(--accent);
+}
+.chase-invest {
+  color: var(--accent);
+  font-weight: 700;
+  text-decoration: none;
+}
+.chase-invest:hover {
+  text-decoration: underline;
 }
 
 /* Leaderboard */
@@ -241,6 +269,27 @@ canvas {
 }
 .lb-delta.down {
   color: var(--neg);
+}
+.lb-invest {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  text-decoration: none;
+  color: var(--text-dim);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+}
+.lb-invest:hover {
+  color: #1a1206;
+  background: var(--accent);
+  border-color: var(--accent);
 }
 
 /* Battle bar (bottom, grows upward) */
@@ -429,13 +478,146 @@ canvas {
 .podium-pct.down {
   color: var(--neg);
 }
+.podium-invest {
+  flex: none;
+  margin-left: 8px;
+  font-size: 12px;
+  font-weight: 700;
+  text-decoration: none;
+  color: #1a1206;
+  background: linear-gradient(180deg, #ffd23f, #f5a623);
+  border-radius: 999px;
+  padding: 5px 11px;
+  white-space: nowrap;
+}
+.podium-invest:hover {
+  filter: brightness(1.05);
+}
+.podium-disclaimer {
+  margin-top: 12px;
+  font-size: 10px;
+  line-height: 1.4;
+  color: var(--text-dim);
+  text-align: center;
+}
+
+/* Persistent compliance note for sponsored affiliate CTAs */
+.disclaimer {
+  position: absolute;
+  bottom: 2px;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: 90%;
+  font-size: 9px;
+  line-height: 1.3;
+  color: var(--text-dim);
+  opacity: 0.6;
+  text-align: center;
+  pointer-events: none;
+}
 
 @media (max-width: 640px) {
-  .leaderboard {
-    width: 180px;
+  /* The page scrolls on mobile: the circuit is a fixed, collapsing header and
+     the leaderboard flows beneath it. #app is the scroll container. */
+  #app {
+    overflow-y: auto;
+    overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
   }
+  .stage-wrap {
+    position: fixed;
+    inset: auto;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 75vh; /* initial; JS keeps it in sync, shrinking to 25vh on scroll */
+    /* Above the leaderboard so the list scrolls *under* the pinned circuit
+       (the leaderboard's backdrop-filter otherwise paints over it). */
+    z-index: 5;
+  }
+
+  /* Leaderboard in normal flow under the circuit: full width, all positions,
+     scrolls with the page (no inner scroll). Sits below the fixed stage and
+     slides under it as the user scrolls. */
+  .mobile-board {
+    position: static;
+    inset: auto;
+    width: 100%;
+    max-width: none;
+    max-height: none;
+    overflow: visible;
+    border: 0;
+    border-radius: 0;
+  }
+  .mobile-board .list {
+    overflow-y: visible;
+  }
+  /* Breathing room so the last position clears the bottom of the screen. */
+  .mobile-board .lb-row:last-child {
+    padding-bottom: 40px;
+  }
+  /* No collapse on mobile — the whole list is meant to scroll. */
+  .mobile-board .lb-caret {
+    display: none;
+  }
+  .mobile-board .lb-toggle {
+    cursor: default;
+  }
+
+  /* When the circuit is shrunk to its thumbnail, drop the floating chips that
+     would crowd it — the leaderboard below carries the same information. */
+  .stage-wrap.stage-collapsed .battle-bar,
+  .stage-wrap.stage-collapsed .race-status,
+  .stage-wrap.stage-collapsed .chase-info {
+    display: none;
+  }
+
+  /* Icon-only controls on a single compact row, clear of the (smaller)
+     minimap on the right. Labels are hidden; the title attribute keeps each
+     button discoverable. The track picker keeps a short (truncated) name. */
+  .controls {
+    right: 122px;
+    flex-wrap: wrap;
+    gap: 5px;
+  }
+  .controls .btn {
+    padding: 6px 9px;
+    border-radius: 8px;
+  }
+  .controls .btn-label {
+    display: none;
+  }
+  .controls .btn-icon {
+    font-size: 15px;
+  }
+  .controls .btn.select {
+    max-width: 86px;
+    font-size: 11px;
+    padding-left: 8px;
+    text-overflow: ellipsis;
+  }
+
   .selector {
     left: 14px;
-    top: 200px;
+    top: 104px;
+    width: calc(100% - 28px);
+    max-width: 280px;
+  }
+
+  .race-status {
+    top: 92px;
+    right: 10px;
+    font-size: 11px;
+    padding: 6px 10px;
+  }
+
+  .battle-bar {
+    max-width: calc(100% - 20px);
+    bottom: 44px;
+  }
+  .chase-info {
+    max-width: calc(100% - 20px);
+    white-space: normal;
+    text-align: center;
   }
 }

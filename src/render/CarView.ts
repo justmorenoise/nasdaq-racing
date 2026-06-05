@@ -79,12 +79,15 @@ export class CarView {
    * @param labelScale  1 / cameraZoom, keeps the label a constant screen size.
    * @param showLabel   whether labels are enabled (global toggle).
    * @param isLeader    P1 — gold label + highlight ring.
+   * @param ringScale   extra multiplier on the leader ring (e.g. 0.5 to shrink
+   *                    it on the mobile circuit thumbnail).
    */
   update(
     pose: CarPose,
     labelScale: number,
     showLabel: boolean,
     isLeader: boolean,
+    ringScale = 1,
   ): void {
     this.root.position.set(pose.x, pose.y);
     this.body.rotation = pose.tangent;
@@ -98,7 +101,7 @@ export class CarView {
       this.label.style.fill = isLeader ? 0xffd23f : 0xffffff;
       this.leaderRing.visible = isLeader;
     }
-    this.leaderRing.scale.set(labelScale);
+    this.leaderRing.scale.set(labelScale * ringScale);
     this.label.visible = showLabel;
     if (this.label.visible) {
       this.label.scale.set(labelScale);
