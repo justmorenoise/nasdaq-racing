@@ -32,8 +32,11 @@ to draw. Keep these layers decoupled — the sim must never import from `render/
   where prices come from.**
 - **`track/`** — A track is a closed centerline polyline → arc-length + per-sample tangent/normal/curvature
   (finite differences in `Track.buildSamples`). `speedProfile.ts` derives local speed from **curvature**
-  (`v ∝ 1/√κ`, capped) with a forward/backward pass to bound accel/braking, normalized so a neutral lap ==
-  the track's `baseLapTime`. This makes cars slow in corners and fast on straights **without real telemetry**.
+  (`severity = (κ/κ_ref)^corneringExp`, `v = vMax−(vMax−vMin)·severity`) with a forward/backward pass to
+  bound accel/braking. Lap time is **not** affected by the profile shape — `RaceModel` scales pace by
+  `rawLapTime/baseLapTime`, so the leader always laps in `baseLapTime`; retuning `vMin`/`corneringExp` only
+  changes the corner-vs-straight *spread* (higher `vMin`/`corneringExp` = faster, flatter corners, slightly
+  slower straights, same lap time). This makes cars slow in corners and fast on straights **without telemetry**.
   Centerlines come from two sources (`centerline.ts`): **real circuit SVGs** in `/circuits/*.svg` (the first
   `<path>` is the centerline, sampled via `getPointAtLength`, scaled ×3) with base lap times from
   `/circuits/circuits.json`, loaded in `tracks.ts` via `import.meta.glob`; plus a hand-made Catmull-Rom oval.
@@ -48,6 +51,10 @@ to draw. Keep these layers decoupled — the sim must never import from `render/
   tracks the standings. `overtake.ts` adds cosmetic lateral lane changes; `battles.ts` detects duels (two
   strategies in `config.ts`); `RaceClock.ts` maps the US session (09:30–16:00 ET) to pre/running/finished
   with a dev time override. Tunables in `config.ts` → `pace`.
+  Each `Car` also accumulates **session stats**: `timeInP1` (laps led), `overtakes` (on-track positions
+  gained, counted in `RaceModel.countOvertakes`) and a decaying `momentum` (recent net % move). The model
+  exposes `momentumLeaderSymbol()` (the "fastest lap" / hottest climber, distinct from the cumulative
+  leader) and `driverOfTheDay()` (most overtakes). These feed the badges below and a future betting layer.
 - **`render/`** — Pixi. Cars are textured sprites from `/car/car.svg` (`carSprite.ts`): the `base` body
   path is recolored to the stock's primary color and the `casco` (helmet) to `color2` if set, else a
   stable per-symbol random color; textures are cached per color combo. `CarView` also has a boost aura, a
@@ -55,14 +62,47 @@ to draw. Keep these layers decoupled — the sim must never import from `render/
   lives in one container that `Camera.ts` translates/scales.
   Two camera modes with eased transitions: **Full** (fit whole track) and **Chase** (follow one car,
   zoom out on straights / in on corners based on current speed). `Minimap.ts`, `TrackView.ts`, `CarView.ts`.
+  `CarView` also draws a purple "fastest lap" ring for the `momentumLeaderSymbol`. `SkidMarks.ts` is a
+  persistent rubber-decal layer (between Scenery and the cars): a single world-space `RenderTexture` that
+  cars stamp into (`clear:false`) at hard-braking corners, so marks accumulate with bounded memory.
+- **`audio/`** — `AudioEngine.ts`: fully **synthesized** race audio (no asset files) for a *single* focused
+  car (P1 in full view, the chased car otherwise) to avoid 20-engine cacophony — an **8-speed gearbox** where
+  the engine pitch tracks *revs within the current gear* (the note saws up toward the redline, then drops on
+  each upshift and jumps up on a downshift, so shifts are audible), with a fast multi-gear *scalata* burst
+  into corners. The shift points are **per-circuit**: `track.gearBounds` (from `track/gearbox.ts`) turns each
+  circuit's `distribuzione_marce` (gear-usage %, in circuits.json) into speed boundaries — so Monza lives in
+  7th/8th and Monaco in 2nd–4th, and 1st is never used unless a circuit weights it (the hairpin). Plus a tyre
+  screech on corner braking, a
+  crowd swell when passing a grandstand (`Scenery.grandstandDists`), and a team-radio blip on an overtake.
+  Off by default; the 🔊 toggle in `Controls` builds the `AudioContext` on the first click (autoplay policy).
 - **`ui/`** — DOM overlays above the canvas (easier to style than canvas text), inside `.ui-overlay`
   (pointer-events pass through except on widgets). `Leaderboard` (live price/Δ/Δ%, ordered by **race
   position** = `model.order` so it matches on-track order; click row → Chase that car), `BattleBar`
   (clickable "Battle X vs Y" chips, bottom-center), `Controls` (Full-view button, auto-director toggle,
-  track `<select>`, `StockSelector` toggle, default top 20). `RaceHud` (status pill top-right, chase gap
-  readout bottom, podium). The P1 car gets a gold label + ring (`CarView`).
+  track `<select>`, label toggle, 🔊 sound toggle, `StockSelector` toggle, default top 20). `RaceHud`
+  (status pill top-right, chase gap readout bottom, podium — now with a **Driver of the Day** row).
+  `Commentary.ts` is a "race radio" feed (top-center): rate-limited one-liners from leader changes,
+  battles, overtakes and big % moves. The P1 car gets a gold label + ring (`CarView`).
+
+- **`data/`** — `nasdaq100.ts` defines the stock universe: `NASDAQ_TOP` (the default top 20, with
+  per-symbol display colors/base prices) and `DEFAULT_SYMBOLS`. This is the seed list `main.ts` passes
+  to the model, feed and `StockSelector`. `gridState.ts` persists the user's chosen grid to `localStorage`
+  and the `?symbols=` URL param (shareable, reload-safe); `loadGridSelection`/`saveGridSelection`.
 
 `config.ts` holds all tunables (% clamp, easing time constants, battle thresholds, zoom range).
+
+## Affiliate / monetization (eToro CTAs)
+
+`affiliate.ts` is the **single boundary** that knows where the "Investi" calls-to-action point — so the
+broker program/URL can change via env without touching any UI. It exposes `affiliateUrl(symbol)` (per-stock
+deep link), `signupUrl()` (global "open account") and `AFFILIATE_REL` (`"sponsored noopener noreferrer"`).
+Links are env-driven: `VITE_AFFILIATE_TEMPLATE` (keep the `{symbol}` placeholder), `VITE_AFFILIATE_SIGNUP`,
+`VITE_AFFILIATE_SUBID` (appended for attribution). Defaults point at public eToro pages (untracked).
+
+A master switch `CONFIG.affiliateEnabled` (currently **`false`**) hides *all* of it at once: the leaderboard ↗
+buttons, podium "Investi" pills, the global "Apri conto" button, the chase-cam link (`main.ts`) and the
+persistent compliance disclaimer. See `.env.example` for the full set of optional env vars (Supabase +
+affiliate). The Finnhub key is **never** in the frontend — only the public anon key is.
 
 ## Conventions
 

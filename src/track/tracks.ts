@@ -24,7 +24,15 @@ const lapTimes = lapData as {
   kerbScale?: number;
   /** Fallback ribbon width override in source units (default 54). */
   width?: number;
+  /** Gear-usage distribution: % of the lap per gear, keyed "1".."8". */
+  distribuzione_marce?: Record<string, number>;
 }[];
+
+/** Turn the circuits.json gear map {"1":…,"8":…} into an ordered [g1..g8] array. */
+function gearArray(d?: Record<string, number>): number[] | undefined {
+  if (!d) return undefined;
+  return Array.from({ length: 8 }, (_, i) => d[String(i + 1)] ?? 0);
+}
 
 const DEFAULT_WIDTH = 54;
 
@@ -62,6 +70,7 @@ const svgTracks: TrackDef[] = lapTimes
       scale,
       kerbScale: entry.kerbScale ?? 1,
       verso: entry.verso,
+      gearDistribution: gearArray(entry.distribuzione_marce),
     };
   })
   .sort((a, b) => {

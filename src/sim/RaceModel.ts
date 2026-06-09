@@ -18,6 +18,8 @@ export class RaceModel {
   readonly cars = new Map<string, Car>();
   /** Cars sorted best-first (most progress). */
   order: Car[] = [];
+  /** Previous frame's on-track rank per symbol, to count overtakes. */
+  private prevRank = new Map<string, number>();
 
   constructor(
     private track: Track,
@@ -71,6 +73,8 @@ export class RaceModel {
       // A sharp upward move lights up the boost glow.
       const rise = u.changePct - car.changePct;
       if (rise > 0.12) car.boost = Math.min(1, car.boost + rise * 0.9);
+      // Feed the momentum signal with the signed move; it decays in update().
+      car.momentum += rise;
       car.changePct = u.changePct;
       car.price = u.price;
     }
@@ -97,6 +101,8 @@ export class RaceModel {
     // Don't lock initial placement until real data has arrived, so cars start
     // already in standings order (avoids an arbitrary 0%-ordered grid sorting out).
     const hasData = standings.some((c) => Math.abs(c.changePct) > 1e-6);
+    // Accrue "laps led" for the standings leader (P1), once real data is in.
+    if (hasData && standings.length) standings[0].timeInP1 += dt;
     const anchor = standings.reduce((m, c) => Math.max(m, c.progress), -Infinity);
     let cum = 0;
     for (let i = 0; i < standings.length; i++) {
@@ -130,9 +136,12 @@ export class RaceModel {
       car.worldSpeed = car.relSpeed * basePaceScalar * adjust;
       car.progress += car.worldSpeed * dt;
       car.distance += car.worldSpeed * dt; // monotonic odometer for lap count
+      // Momentum is a ~20s decaying memory of recent net % movement.
+      car.momentum *= Math.exp(-dt / 20);
     }
 
     this.recomputeOrder();
+    this.countOvertakes();
     updateLanes(this.order, this.track);
 
     for (const car of this.cars.values()) {
@@ -142,6 +151,45 @@ export class RaceModel {
 
   private recomputeOrder(): void {
     this.order = [...this.cars.values()].sort((a, b) => b.progress - a.progress);
+  }
+
+  /**
+   * Credit each car with the on-track positions it gained since last frame
+   * (a position improvement = an overtake made). Cars only present in one of
+   * the two frames are ignored, so add/remove doesn't pollute the count.
+   */
+  private countOvertakes(): void {
+    const rank = new Map<string, number>();
+    this.order.forEach((car, i) => {
+      const prev = this.prevRank.get(car.symbol);
+      if (prev !== undefined && i < prev) car.overtakes += prev - i;
+      rank.set(car.symbol, i);
+    });
+    this.prevRank = rank;
+  }
+
+  /** Symbol with the strongest recent climb ("fastest lap"), or null if flat. */
+  momentumLeaderSymbol(): string | null {
+    let best: Car | null = null;
+    for (const car of this.cars.values()) {
+      if (car.momentum > 0.05 && (!best || car.momentum > best.momentum)) best = car;
+    }
+    return best?.symbol ?? null;
+  }
+
+  /** Driver of the Day: most overtakes, tie-broken by best % change. */
+  driverOfTheDay(): Car | null {
+    let best: Car | null = null;
+    for (const car of this.cars.values()) {
+      if (
+        !best ||
+        car.overtakes > best.overtakes ||
+        (car.overtakes === best.overtakes && car.changePct > best.changePct)
+      ) {
+        best = car;
+      }
+    }
+    return best && best.overtakes > 0 ? best : null;
   }
 
   /** World pose for a car including its lateral lane offset. */

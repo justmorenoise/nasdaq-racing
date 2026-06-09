@@ -6,6 +6,7 @@ import { TrackView } from "./render/TrackView";
 import { loadGrassBackground } from "./render/textures";
 import { Scenery } from "./render/Scenery";
 import { CarView } from "./render/CarView";
+import { SkidMarks } from "./render/SkidMarks";
 import { Camera } from "./render/Camera";
 import { Minimap } from "./render/Minimap";
 import { RaceModel } from "./sim/RaceModel";
@@ -13,13 +14,18 @@ import { SimulatedFeed } from "./feed/SimulatedFeed";
 import { SupabaseFeed } from "./feed/SupabaseFeed";
 import type { PriceFeed } from "./feed/PriceFeed";
 import { DEFAULT_SYMBOLS } from "./data/nasdaq100";
+import { loadGridSelection, saveGridSelection } from "./data/gridState";
 import { Leaderboard } from "./ui/Leaderboard";
 import { Controls } from "./ui/Controls";
 import { StockSelector } from "./ui/StockSelector";
 import { BattleBar } from "./ui/BattleBar";
+import { Commentary } from "./ui/Commentary";
 import { detectBattles } from "./sim/battles";
 import { RaceClock } from "./sim/RaceClock";
 import { RaceHud } from "./ui/RaceHud";
+import { AudioEngine } from "./audio/AudioEngine";
+import { gearAtSpeed } from "./track/gearbox";
+import { CONFIG } from "./config";
 import { affiliateUrl, affiliateEnabled, AFFILIATE_REL } from "./affiliate";
 
 async function boot() {
@@ -60,6 +66,9 @@ async function boot() {
   // hitting the US market close; an explicit ?demo=N still ends with a podium.
   const clock = new RaceClock(demoSeconds, !useSupabase && demoSeconds == null);
   const trackId = params.get("track") || DEFAULT_TRACK_ID;
+  // The starting grid is shareable/persisted (?symbols= + localStorage); falls
+  // back to the default top 20 when there's no saved or shared selection.
+  const initialSymbols = loadGridSelection(params) ?? [...DEFAULT_SYMBOLS];
 
   const world = new Container();
   app.stage.addChild(world);
@@ -68,7 +77,12 @@ async function boot() {
   await loadGrassBackground();
   const layout = computeLayout(track);
   world.addChild(new TrackView(track, layout).container);
-  world.addChild(new Scenery(track, layout).container);
+  const scenery = new Scenery(track, layout);
+  world.addChild(scenery.container);
+
+  // Rubber marks accumulate under the cars at hard-braking corners.
+  const skid = new SkidMarks(track, app.renderer);
+  world.addChild(skid.container);
 
   const carLayer = new Container();
   world.addChild(carLayer);
@@ -76,7 +90,7 @@ async function boot() {
   const labelLayer = new Container();
   world.addChild(labelLayer);
 
-  const model = new RaceModel(track, DEFAULT_SYMBOLS);
+  const model = new RaceModel(track, initialSymbols);
   const camera = new Camera(world, track, model, app.screen);
 
   let directorOn = false;
@@ -117,7 +131,7 @@ async function boot() {
     ? new SupabaseFeed(supaUrl!, supaKey!)
     : new SimulatedFeed();
   feed.onUpdate((updates) => model.applyUpdates(updates));
-  feed.start(DEFAULT_SYMBOLS);
+  feed.start(initialSymbols);
 
   // Late-join: if the session is already underway, seed the field's positions.
   const startSample = clock.sample();
@@ -130,15 +144,17 @@ async function boot() {
   overlay.className = "ui-overlay";
   stageWrap.appendChild(overlay);
 
-  let activeSymbols = [...DEFAULT_SYMBOLS];
+  let activeSymbols = [...initialSymbols];
   const leaderboard = new Leaderboard((sym) => followManually(sym));
   const selector = new StockSelector(activeSymbols, (syms) => {
     activeSymbols = syms;
+    saveGridSelection(syms);
     model.setSymbols(syms);
     feed.start(syms);
     syncCarViews();
   });
   let labelsOn = true;
+  const audio = new AudioEngine();
   const controls = new Controls({
     onFullView: () => {
       directorOn = false;
@@ -153,6 +169,7 @@ async function boot() {
       labelsOn = on;
     },
     labelsOn,
+    onToggleSound: () => audio.toggle(),
     tracks: TRACKS.map((t) => ({ id: t.id, name: t.name })),
     currentTrack: trackId,
     onTrackChange: (id) => {
@@ -161,18 +178,24 @@ async function boot() {
     },
   });
   const battleBar = new BattleBar((sym) => camera.follow(sym));
+  const commentary = new Commentary();
   const raceHud = new RaceHud(track.length, (sym) => camera.follow(sym));
+  // Debug-only gear readout for the focused car (hidden unless CONFIG.debug.showGear).
+  const gearHud = document.createElement("div");
+  gearHud.className = "gear-debug hidden";
   // Leaderboard placement is layout-dependent (see applyLayout below): an
   // absolute overlay panel on desktop, an in-flow block under the circuit on
   // mobile, so the rest goes in the overlay here.
   overlay.append(
     controls.el,
     battleBar.el,
+    commentary.el,
     selector.el,
     raceHud.status,
     raceHud.chaseInfo,
     raceHud.podium,
   );
+  if (CONFIG.debug.showGear) overlay.append(gearHud);
 
   // Persistent compliance note for the sponsored affiliate CTAs.
   if (affiliateEnabled) {
@@ -226,6 +249,9 @@ async function boot() {
       stageCollapsed = collapsed;
       stageWrap.classList.toggle("stage-collapsed", collapsed);
     }
+    // "Full" only at the resting height: the battle bar shows just here and
+    // disappears the moment the circuit starts shrinking.
+    stageWrap.classList.toggle("stage-full", h >= h0 - 2);
   };
 
   const applyLayout = () => {
@@ -242,7 +268,7 @@ async function boot() {
       if (leaderboard.el.parentElement !== overlay) overlay.appendChild(leaderboard.el);
       stageWrap.style.height = "";
       stageCollapsed = false;
-      stageWrap.classList.remove("stage-collapsed");
+      stageWrap.classList.remove("stage-collapsed", "stage-full");
     }
   };
   applyLayout();
@@ -267,8 +293,12 @@ async function boot() {
   let directorAccum = 0;
   const frame = (dt: number) => {
     const clk = clock.sample();
-    if (clk.state === "running") model.update(dt * timeScale);
-    else if (clk.state === "finished") raceHud.showPodium(model.order);
+    if (clk.state === "running") {
+      model.update(dt * timeScale);
+      skid.update(model.cars.values(), (c) => model.poseForCar(c));
+    } else if (clk.state === "finished") {
+      raceHud.showPodium(model.order, model.driverOfTheDay());
+    }
 
     // Auto-director: every few seconds, cut to the hottest battle (or leader).
     if (directorOn) {
@@ -293,6 +323,24 @@ async function boot() {
         leaderSym = car.symbol;
       }
     }
+    // "Fastest lap" holder — the car climbing hardest right now (may be none).
+    const momentumSym = model.momentumLeaderSymbol();
+
+    // Audio tracks one car: the chased car if any, else P1. Silent unless racing.
+    const focusSym = camera.followedSymbol ?? leaderSym;
+    const focusCar =
+      clk.state === "running" && focusSym ? model.cars.get(focusSym) ?? null : null;
+    audio.update(focusCar, track, scenery.grandstandDists);
+
+    if (CONFIG.debug.showGear) {
+      if (focusCar) {
+        const gear = gearAtSpeed(focusCar.relSpeed, track.gearBounds);
+        gearHud.textContent = `${focusCar.symbol} · ${gear}ª`;
+        gearHud.classList.remove("hidden");
+      } else {
+        gearHud.classList.add("hidden");
+      }
+    }
     // Labels follow the global toggle, but are suppressed on the shrunken mobile
     // thumbnail where they'd be oversized and overlap.
     const showLabels = labelsOn && !stageCollapsed;
@@ -305,7 +353,14 @@ async function boot() {
       // pack never hide behind another car).
       carViews
         .get(sym)
-        ?.update(model.poseForCar(car), labelScale, showLabels, sym === leaderSym, ringScale);
+        ?.update(
+          model.poseForCar(car),
+          labelScale,
+          showLabels,
+          sym === leaderSym,
+          ringScale,
+          sym === momentumSym,
+        );
     }
     minimap.update(camera.followedSymbol);
 
@@ -323,6 +378,7 @@ async function boot() {
       updateStage();
       const battles = detectBattles(model.cars.values(), track);
       battleBar.update(battles);
+      if (clk.state === "running") commentary.update(byPct, model.order, battles);
       raceHud.setStatus(clk);
 
       // Broadcast gap readout for the chased car.

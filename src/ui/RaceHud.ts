@@ -50,7 +50,7 @@ export class RaceHud {
     }
   }
 
-  showPodium(order: Car[]): void {
+  showPodium(order: Car[], dotd?: Car | null): void {
     if (!this.podium.classList.contains("hidden")) return;
     // The day's result is the final standings: rank by daily % change (best
     // first), not by the on-track running order.
@@ -79,15 +79,25 @@ export class RaceHud {
     const disclaimer = affiliateEnabled
       ? `<div class="podium-disclaimer">Link sponsorizzati. Le azioni/CFD comportano rischi. Non è consulenza finanziaria.</div>`
       : "";
+    // Driver of the Day: the most aggressive climber (most overtakes).
+    const dotdRow = dotd
+      ? `<div class="podium-dotd" data-sym="${dotd.symbol}">
+          🟣 <b>Driver of the Day</b> · ${dotd.symbol}
+          <span class="podium-dotd-meta">${dotd.overtakes} sorpassi</span>
+        </div>`
+      : "";
     this.podium.innerHTML = `
       <div class="podium-card">
         <div class="podium-title">🏁 RISULTATO DI GIORNATA</div>
         ${rows}
+        ${dotdRow}
         ${disclaimer}
       </div>`;
-    this.podium.querySelectorAll<HTMLElement>(".podium-row").forEach((b) =>
-      b.addEventListener("click", () => this.onSelect(b.dataset.sym!)),
-    );
+    this.podium
+      .querySelectorAll<HTMLElement>(".podium-row, .podium-dotd")
+      .forEach((b) =>
+        b.addEventListener("click", () => this.onSelect(b.dataset.sym!)),
+      );
     // The affiliate link opens the broker; don't let it trigger the row's chase.
     this.podium.querySelectorAll<HTMLElement>(".podium-invest").forEach((a) =>
       a.addEventListener("click", (e) => e.stopPropagation()),

@@ -40,6 +40,7 @@ export class Controls {
     onToggleDirector: (on: boolean) => void;
     onToggleLabels: (on: boolean) => void;
     labelsOn: boolean;
+    onToggleSound: () => boolean;
     tracks: { id: string; name: string }[];
     currentTrack: string;
     onTrackChange: (id: string) => void;
@@ -79,10 +80,18 @@ export class Controls {
       opts.onToggleLabels(opts.labelsOn);
     });
 
+    const sound = iconButton("🔇", "Audio");
+    sound.btn.addEventListener("click", () => {
+      const on = opts.onToggleSound();
+      sound.btn.classList.toggle("active", on);
+      sound.setLabel(on ? "Audio ON" : "Audio");
+      sound.btn.querySelector(".btn-icon")!.textContent = on ? "🔊" : "🔇";
+    });
+
     const sel = iconButton("☰", "Titoli");
     sel.btn.addEventListener("click", opts.onToggleSelector);
 
-    this.el.append(full.btn, director.btn, trackSel, labels.btn, sel.btn);
+    this.el.append(full.btn, director.btn, trackSel, labels.btn, sound.btn, sel.btn);
 
     if (affiliateEnabled) {
       const invest = document.createElement("a");

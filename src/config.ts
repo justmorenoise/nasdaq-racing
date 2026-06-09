@@ -6,6 +6,12 @@ export const CONFIG = {
   /** Daily % change is clamped to this band before mapping to lap time. */
   changePctClamp: 8,
 
+  /** Debug overlays — off in normal use. */
+  debug: {
+    /** Show the focused car's current gear (a small badge over the circuit). */
+    showGear: true,
+  },
+
   /**
    * Broker affiliate CTAs (the "Investi" links/buttons and every eToro
    * reference added on top of the viewer). Set to `false` to hide all of them
@@ -38,11 +44,15 @@ export const CONFIG = {
    * same on a short kart-like track and a long one.
    */
   profile: {
-    vMin: 0.28, // slowest corner as a fraction of top speed
+    vMin: 0.42, // slowest corner as a fraction of top speed (F1 carry plenty of speed)
     vMax: 1.0, // straight-line top speed
     accel: 6, // acceleration limit (rel-speed² gained per lap-fraction)
     brake: 13, // braking limit (rel-speed² shed per lap-fraction)
     corneringPercentile: 0.9, // curvature percentile that maps to vMin
+    /** Severity curve exponent on (κ/κ_ref): 0.5 = √ (brakes a lot even for gentle
+     *  bends); higher (→1) keeps medium/fast corners closer to top speed, so only
+     *  the tightest really slow down — some sweepers stay near-flat. */
+    corneringExp: 0.78,
     smoothing: 2, // curvature smoothing window (samples each side)
   },
 

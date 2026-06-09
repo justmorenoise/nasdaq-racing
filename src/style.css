@@ -328,6 +328,67 @@ canvas {
   }
 }
 
+/* Commentary "race radio" feed (top-center, newest on top) */
+.commentary {
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: min(360px, 60%);
+  align-items: center;
+  pointer-events: none;
+  z-index: 4;
+}
+.commentary-line {
+  max-width: 100%;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+  background: rgba(10, 14, 20, 0.78);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  padding: 6px 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  backdrop-filter: blur(6px);
+  animation: commentary-in 0.28s ease-out;
+  transition: opacity 0.5s ease, transform 0.5s ease;
+}
+.commentary-line.fading {
+  opacity: 0;
+  transform: translateY(-6px);
+}
+@keyframes commentary-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.96);
+  }
+}
+
+/* Debug gear readout */
+.gear-debug {
+  position: absolute;
+  top: 178px;
+  right: 16px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  font-weight: 700;
+  color: #ffd23f;
+  background: rgba(10, 14, 20, 0.8);
+  border: 1px solid rgba(255, 210, 63, 0.4);
+  border-radius: 8px;
+  padding: 5px 10px;
+  pointer-events: none;
+  z-index: 5;
+}
+.gear-debug.hidden {
+  display: none;
+}
+
 /* Stock selector */
 .selector {
   position: absolute;
@@ -493,6 +554,27 @@ canvas {
 .podium-invest:hover {
   filter: brightness(1.05);
 }
+.podium-dotd {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 8px 10px;
+  font-size: 13px;
+  cursor: pointer;
+  border-radius: 8px;
+  background: rgba(177, 75, 255, 0.12);
+  border: 1px solid rgba(177, 75, 255, 0.35);
+}
+.podium-dotd:hover {
+  background: rgba(177, 75, 255, 0.2);
+}
+.podium-dotd-meta {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
 .podium-disclaimer {
   margin-top: 12px;
   font-size: 10px;
@@ -566,10 +648,18 @@ canvas {
 
   /* When the circuit is shrunk to its thumbnail, drop the floating chips that
      would crowd it — the leaderboard below carries the same information. */
-  .stage-wrap.stage-collapsed .battle-bar,
   .stage-wrap.stage-collapsed .race-status,
-  .stage-wrap.stage-collapsed .chase-info {
+  .stage-wrap.stage-collapsed .chase-info,
+  .stage-wrap.stage-collapsed .commentary {
     display: none;
+  }
+  /* The battle bar shows only while the circuit is fully expanded; it hides as
+     soon as the user starts scrolling (any shrink). */
+  .battle-bar {
+    display: none;
+  }
+  .stage-wrap.stage-full .battle-bar {
+    display: flex;
   }
 
   /* Icon-only controls on a single compact row, clear of the (smaller)

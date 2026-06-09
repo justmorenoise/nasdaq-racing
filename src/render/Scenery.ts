@@ -14,6 +14,8 @@ import { offsetPoint, type TrackLayout } from "../track/corners";
  */
 export class Scenery {
   readonly container = new Container();
+  /** Arc-length positions of the placed grandstands, for crowd-cheer audio. */
+  readonly grandstandDists: number[] = [];
   private cx: number;
   private cy: number;
   /** Sample indices occupied by the pit complex, and the side it sits on, so
@@ -155,6 +157,8 @@ export class Scenery {
           }
         }
         if (onTrack) continue;
+
+        this.grandstandDists.push(p.dist);
 
         // Tarmac apron + front barrier, the seating bank, then a thin back roof,
         // all measured outward from the real track edge.

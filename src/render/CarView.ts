@@ -20,6 +20,7 @@ export class CarView {
   private sprite = new Sprite();
   private aura = new Graphics();
   private leaderRing = new Graphics();
+  private momentumRing = new Graphics();
   private label: Text;
   private isLeader = false;
 
@@ -40,6 +41,15 @@ export class CarView {
     });
     this.leaderRing.visible = false;
     this.root.addChild(this.leaderRing);
+
+    // "Fastest lap" marker (F1 purple) for the current momentum leader.
+    this.momentumRing.circle(0, 0, CAR_LEN * this.scale * 0.78).stroke({
+      width: 2,
+      color: 0xb14bff,
+      alpha: 0.95,
+    });
+    this.momentumRing.visible = false;
+    this.root.addChild(this.momentumRing);
 
     this.sprite.anchor.set(0.5);
     this.sprite.rotation = SPRITE_ROT;
@@ -81,6 +91,7 @@ export class CarView {
    * @param isLeader    P1 — gold label + highlight ring.
    * @param ringScale   extra multiplier on the leader ring (e.g. 0.5 to shrink
    *                    it on the mobile circuit thumbnail).
+   * @param isMomentum  current "fastest lap" holder — purple marker ring.
    */
   update(
     pose: CarPose,
@@ -88,6 +99,7 @@ export class CarView {
     showLabel: boolean,
     isLeader: boolean,
     ringScale = 1,
+    isMomentum = false,
   ): void {
     this.root.position.set(pose.x, pose.y);
     this.body.rotation = pose.tangent;
@@ -102,6 +114,8 @@ export class CarView {
       this.leaderRing.visible = isLeader;
     }
     this.leaderRing.scale.set(labelScale * ringScale);
+    this.momentumRing.visible = isMomentum && !isLeader;
+    this.momentumRing.scale.set(labelScale * ringScale);
     this.label.visible = showLabel;
     if (this.label.visible) {
       this.label.scale.set(labelScale);

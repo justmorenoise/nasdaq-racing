@@ -28,6 +28,15 @@ export class Car {
   /** Transient glow [0,1] that spikes on a sharp upward move and decays. */
   boost = 0;
 
+  // --- Session stats (drive the momentum/DOTD badges and, later, betting) ---
+  /** Seconds spent as the standings leader (P1) this session — "laps led". */
+  timeInP1 = 0;
+  /** On-track positions gained over the session — "overtakes made". */
+  overtakes = 0;
+  /** Decaying net % movement over the recent window — who's climbing *now*
+   *  (the "fastest lap" holder), as opposed to the cumulative % leader. */
+  momentum = 0;
+
   constructor(def: StockDef) {
     this.symbol = def.symbol;
     this.name = def.name;

@@ -1,4 +1,5 @@
 import { CONFIG } from "../config";
+import { computeGearBounds, DEFAULT_GEAR_DISTRIBUTION } from "./gearbox";
 import type { TrackSample } from "./Track";
 
 /**
@@ -16,11 +17,15 @@ import type { TrackSample } from "./Track";
  * Returns per-sample relative speeds and the "raw" lap time (∫ ds/v) used to
  * scale a car to its target lap time elsewhere.
  */
-export function computeSpeedProfile(samples: TrackSample[]): {
+export function computeSpeedProfile(
+  samples: TrackSample[],
+  gearDistribution?: number[],
+): {
   relSpeeds: number[];
   rawLapTime: number;
+  gearBounds: number[];
 } {
-  const { vMin, vMax, accel, brake, corneringPercentile, smoothing } =
+  const { vMin, vMax, accel, brake, corneringPercentile, corneringExp, smoothing } =
     CONFIG.profile;
   const n = samples.length;
 
@@ -42,9 +47,11 @@ export function computeSpeedProfile(samples: TrackSample[]): {
   // scale. Curvature at/above this maps to vMin.
   const kRef = percentile(curv, corneringPercentile) || 1e-6;
 
-  // Base cornering speed from relative curvature severity.
+  // Base cornering speed from relative curvature severity. The exponent shapes
+  // how quickly speed bleeds off with curvature: <1 brakes early even for gentle
+  // bends, →1 keeps medium/fast corners near top speed (only the tightest slow).
   const v = curv.map((k) => {
-    const severity = Math.min(1, Math.sqrt(k / kRef)); // 0 straight .. 1 tightest
+    const severity = Math.min(1, Math.pow(k / kRef, corneringExp)); // 0 straight .. 1 tightest
     return vMax - (vMax - vMin) * severity;
   });
 
@@ -71,7 +78,16 @@ export function computeSpeedProfile(samples: TrackSample[]): {
     rawLapTime += segLen[i] / Math.max(0.5 * (v[i] + v[j]), 1e-6);
   }
 
-  return { relSpeeds: v, rawLapTime };
+  // Gear shift points from this circuit's gear-usage distribution.
+  const gearBounds = computeGearBounds(
+    v,
+    segLen,
+    total,
+    gearDistribution ?? DEFAULT_GEAR_DISTRIBUTION,
+    vMax,
+  );
+
+  return { relSpeeds: v, rawLapTime, gearBounds };
 }
 
 function smoothCurvature(samples: TrackSample[], window: number): number[] {

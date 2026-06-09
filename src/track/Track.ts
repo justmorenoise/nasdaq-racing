@@ -25,6 +25,10 @@ export interface TrackDef {
   startWorld?: Pt;
   /** Travel direction: clockwise or counter-clockwise (as seen on screen). */
   verso?: "cw" | "ccw";
+  /** Gear-usage distribution (gears 1..8): the % of the lap spent in each gear,
+   *  used to derive the gearbox shift points for this circuit. From
+   *  `distribuzione_marce` in circuits.json; defaults applied if absent. */
+  gearDistribution?: number[];
 }
 
 export interface TrackSample {
@@ -149,6 +153,8 @@ export class Track {
   readonly samples: TrackSample[];
   readonly length: number;
   readonly rawLapTime: number;
+  /** Gear-boundary speeds (8 ascending relSpeed upper edges) for this circuit. */
+  readonly gearBounds: number[];
   readonly bounds: { minX: number; minY: number; maxX: number; maxY: number };
   /** Arc-length of the start/finish line (0 if no marker is known). */
   readonly startDist: number;
@@ -172,9 +178,13 @@ export class Track {
     this.samples = this.buildSamples(centerline);
     this.length = this.samples[this.samples.length - 1].dist;
 
-    const { relSpeeds, rawLapTime } = computeSpeedProfile(this.samples);
+    const { relSpeeds, rawLapTime, gearBounds } = computeSpeedProfile(
+      this.samples,
+      def.gearDistribution,
+    );
     this.samples.forEach((s, i) => (s.relSpeed = relSpeeds[i]));
     this.rawLapTime = rawLapTime;
+    this.gearBounds = gearBounds;
 
     this.bounds = this.computeBounds();
     this.startDist = this.computeStartDist();
