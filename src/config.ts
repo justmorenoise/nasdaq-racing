@@ -46,7 +46,7 @@ export const CONFIG = {
   profile: {
     vMin: 0.42, // slowest corner as a fraction of top speed (F1 carry plenty of speed)
     vMax: 1.0, // straight-line top speed
-    accel: 2.2, // acceleration limit (rel-speed² gained per lap-fraction)
+    accel: 6, // acceleration limit (rel-speed² gained per lap-fraction)
     brake: 13, // braking limit (rel-speed² shed per lap-fraction)
     corneringPercentile: 0.9, // curvature percentile that maps to vMin
     /** Severity curve exponent on (κ/κ_ref): 0.5 = √ (brakes a lot even for gentle

@@ -14,33 +14,22 @@ export interface TelemetryPoint {
 const GEARS = 8;
 
 /**
- * Base speed profile from telemetry. The hard part is *where* each braking zone
- * goes: a circuit SVG is a stylised drawing, so its arc-length is **not** a
- * linear function of real track distance (at Monza the first chicane sits ~250 m
- * *ahead* of where `distM/lapLength` predicts, the Parabolica ~400 m *behind*).
- * Positioning caps by raw distance therefore drops the brake zones on the wrong
- * stretch of tarmac. But positioning purely by curvature fails the other way —
- * the SVG draws the (fast) Parabolica as tight as the (slow) chicane, so the
- * gears come out wrong.
+ * Base speed profile from telemetry. The telemetry stations *are* the profile:
+ * the real speed at a sequence of points around the lap (apices, plus — where the
+ * data provides them — the braking/approach/exit points that shape each corner).
+ * So the profile is a **direct interpolation** of those speeds, and the caller
+ * skips its accel/brake passes (which would pull straights back below their data
+ * speed and erase the late braking the data encodes).
  *
- * So we split the two concerns: **positions come from the geometry** (corner =
- * curvature peak, aligned by construction) and **speeds/gears come from the
- * telemetry**. The telemetry's brake points (local speed minima) are matched to
- * the geometric corners *in lap order* (`matchCorners`, a monotonic
- * least-displacement assignment that absorbs the non-linear drawing distortion).
- * Then two caps are applied:
- *
- *  1. **Per-segment ceiling** — between two consecutive corners the car can only
- *     reach the *fastest telemetry speed recorded in that stretch*. A short
- *     straight between two slow corners (Roggia→Lesmo) keeps a mid gear instead
- *     of snapping to top speed/8th, while a real straight (the Serraglio, the pit
- *     straight) still tops out, so 8th lives only on the genuine fast sections.
- *  2. **Corner floor** — each corner's high-curvature region is capped at its
- *     telemetry speed.
- *
- * The caller's accel/brake passes then grow the approach/exit, so the car holds
- * the segment's top gear then brakes late into the corner, in the telemetry gear,
- * exactly where the track actually bends.
+ * The only hard part is *where* each station sits: a circuit SVG is a stylised
+ * drawing, so its arc-length is **not** a linear function of real track distance
+ * (at Monza the first chicane sits ~250 m *ahead* of where `distM/lapLength`
+ * predicts, the Parabolica ~400 m *behind*). So the corner apices (telemetry speed
+ * minima) are matched to the geometric corners (curvature peaks) *in lap order*
+ * (`alignTelemetry` → `monotonicMatch`), and those matched pairs anchor a
+ * piecewise-linear distance→arc remap that places every other station — absorbing
+ * the non-linear distortion. The profile then passes through each station's speed
+ * exactly, at the spot where the track actually bends.
  */
 export function telemetryBaseProfile(
   samples: TrackSample[],
@@ -56,11 +45,11 @@ export function telemetryBaseProfile(
   const span = Math.max(1, kmhMax - kmhMin);
   const relAt = (kmh: number) => vMin + (vMax - vMin) * ((kmh - kmhMin) / span);
 
-  const v = new Array<number>(n).fill(vMax);
-  const matched = matchCorners(samples, telemetry, length, startDist, lapLengthM);
+  const aligned = alignTelemetry(samples, telemetry, length, startDist, lapLengthM);
 
-  if (!matched || matched.corners.length < 2) {
-    // Degenerate (no detectable corners): drop each cap at its raw distance.
+  if (!aligned || aligned.length < 2) {
+    // Degenerate (no detectable corners): drop each speed at its raw distance.
+    const v = new Array<number>(n).fill(vMax);
     const startFrac = startDist / length;
     for (const p of telemetry) {
       const frac = (((startFrac + p.distM / lapLengthM) % 1) + 1) % 1;
@@ -71,96 +60,120 @@ export function telemetryBaseProfile(
     return v;
   }
 
-  const { corners } = matched;
-  const posOf = (i: number) =>
-    ((((samples[i].dist - startDist) % length) + length) % length) / length;
-
-  // 1. Per-segment ceiling between consecutive corners (lap order, wrapping).
-  const C = corners.length;
-  for (let c = 0; c < C; c++) {
-    const a = corners[c];
-    const b = corners[(c + 1) % C];
-    let ceil = Math.max(relAt(a.kmh), relAt(b.kmh));
-    for (const p of telemetry) {
-      if (inArcDist(p.distM, a.distM, b.distM, lapLengthM)) {
-        ceil = Math.max(ceil, relAt(p.kmh));
-      }
-    }
-    for (let i = 0; i < n; i++) {
-      if (inArcFrac(posOf(i), a.pos, b.pos) && ceil < v[i]) v[i] = ceil;
-    }
-  }
-
-  // 2. Corner floor across each corner's high-curvature region.
-  for (const cnr of corners) {
-    const rel = relAt(cnr.kmh);
-    const { lo, hi } = cnr.peak;
-    for (let k = lo; k !== (hi + 1) % n; k = (k + 1) % n) {
-      if (rel < v[k]) v[k] = rel;
-    }
+  const pos = aligned.map((s) => s.pos);
+  const rel = aligned.map((s) => relAt(s.kmh));
+  const v = new Array<number>(n);
+  for (let i = 0; i < n; i++) {
+    const x = ((((samples[i].dist - startDist) % length) + length) % length) / length;
+    v[i] = interpCircular(pos, rel, x);
   }
   return v;
 }
 
-/** Is distance `d` in the open arc from `a` to `b` (metres, wrapping at `lap`)? */
-function inArcDist(d: number, a: number, b: number, lap: number): boolean {
-  const w = (x: number) => ((x % lap) + lap) % lap;
-  d = w(d);
-  a = w(a);
-  b = w(b);
-  return a < b ? d > a && d < b : d > a || d < b;
+/**
+ * Linear interpolation of `rel` over the lap-fraction positions `pos` (ascending,
+ * in [0,1)), wrapping around the start/finish line (the segment from the last
+ * station back to the first crosses pos = 1 → 0).
+ */
+function interpCircular(pos: number[], rel: number[], x: number): number {
+  const P = pos.length;
+  if (x < pos[0] || x >= pos[P - 1]) {
+    const a = pos[P - 1];
+    const b = pos[0] + 1;
+    const xe = x < pos[0] ? x + 1 : x;
+    const t = b > a ? (xe - a) / (b - a) : 0;
+    return rel[P - 1] + (rel[0] - rel[P - 1]) * t;
+  }
+  let lo = 0;
+  let hi = P - 1;
+  while (lo + 1 < hi) {
+    const mid = (lo + hi) >> 1;
+    if (pos[mid] <= x) lo = mid;
+    else hi = mid;
+  }
+  const t = pos[hi] > pos[lo] ? (x - pos[lo]) / (pos[hi] - pos[lo]) : 0;
+  return rel[lo] + (rel[hi] - rel[lo]) * t;
 }
 
-/** Is fraction `x` in the open arc from `a` to `b` (lap fractions, wrapping at 1)? */
-function inArcFrac(x: number, a: number, b: number): boolean {
-  return a < b ? x > a && x < b : x > a || x < b;
-}
-
-/** A telemetry brake point matched to a geometric corner. */
-interface MatchedCorner {
-  distM: number;
+/** A telemetry station placed on the track geometry. */
+interface AlignedStation {
+  /** Arc-length fraction from the start/finish line. */
+  pos: number;
   kmh: number;
   gear: number;
-  /** Arc-length fraction of the corner apex, from the start/finish line. */
-  pos: number;
-  peak: CornerPeak;
+  label?: string;
 }
 
 /**
- * Match the telemetry's brake points (local speed minima) to the circuit's
- * geometric corners (curvature peaks), preserving lap order. Returns the matched
- * corners (with their geometric apex position) ordered around the lap, or null
- * when nothing is detectable. Shared by the speed profile and the sector labels
- * so both place the telemetry on the same geometry.
+ * Place every telemetry station on the track geometry. The corner apices (speed
+ * minima) are matched to curvature peaks in lap order; the matched pairs (plus the
+ * start/finish line) anchor a piecewise-linear distance→arc remap that positions
+ * every other station, absorbing the non-linear drawing distortion. Returns the
+ * stations ordered around the lap, or null when nothing is detectable. Shared by
+ * the speed profile and the sector labels so both sit on the same geometry.
  */
-function matchCorners(
+function alignTelemetry(
   samples: TrackSample[],
   telemetry: TelemetryPoint[],
   length: number,
   startDist: number,
   lapLengthM: number,
-): { corners: MatchedCorner[] } | null {
-  const minima = speedMinima(telemetry);
+): AlignedStation[] | null {
   const geom = curvaturePeaks(samples, startDist, length);
-  if (!minima.length || !geom.length) return null;
+  if (!geom.length) return null;
+
+  const minIdx = speedMinimaIndices(telemetry);
+  if (!minIdx.length) return null;
+
   const match = monotonicMatch(
-    minima.map((p) => (((p.distM / lapLengthM) % 1) + 1) % 1),
+    minIdx.map((i) => (((telemetry[i].distM / lapLengthM) % 1) + 1) % 1),
     geom.map((g) => g.pos),
   );
-  const corners: MatchedCorner[] = [];
-  for (let i = 0; i < minima.length; i++) {
-    const g = match[i];
+
+  // distM → lap-fraction anchors: start/finish line + each matched apex.
+  const anchors = [{ d: 0, f: 0 }];
+  const posByIdx = new Map<number, number>();
+  for (let c = 0; c < minIdx.length; c++) {
+    const g = match[c];
     if (g < 0) continue;
-    corners.push({
-      distM: minima[i].distM,
-      kmh: minima[i].kmh,
-      gear: minima[i].gear,
-      pos: geom[g].pos,
-      peak: geom[g],
-    });
+    anchors.push({ d: telemetry[minIdx[c]].distM, f: geom[g].pos });
+    posByIdx.set(minIdx[c], geom[g].pos);
   }
-  corners.sort((a, b) => a.pos - b.pos);
-  return { corners };
+  anchors.push({ d: lapLengthM, f: 1 });
+  anchors.sort((a, b) => a.d - b.d);
+
+  const remap = (distM: number): number => {
+    const d = ((distM % lapLengthM) + lapLengthM) % lapLengthM;
+    let i = 0;
+    while (i < anchors.length - 1 && d >= anchors[i + 1].d) i++;
+    const a = anchors[i];
+    const b = anchors[Math.min(i + 1, anchors.length - 1)];
+    const t = b.d > a.d ? (d - a.d) / (b.d - a.d) : 0;
+    return ((a.f + (b.f - a.f) * t) % 1 + 1) % 1;
+  };
+
+  const stations: AlignedStation[] = telemetry.map((p, i) => ({
+    pos: posByIdx.has(i) ? (posByIdx.get(i) as number) : remap(p.distM),
+    kmh: p.kmh,
+    gear: p.gear,
+    label: p.label,
+  }));
+  stations.sort((a, b) => a.pos - b.pos);
+  return stations;
+}
+
+/** Telemetry stations that are local speed minima around the lap (corner apices). */
+function speedMinimaIndices(telemetry: TelemetryPoint[]): number[] {
+  const m = telemetry.length;
+  if (m <= 2) return telemetry.map((_, i) => i);
+  const out: number[] = [];
+  for (let i = 0; i < m; i++) {
+    const prev = telemetry[(i - 1 + m) % m].kmh;
+    const cur = telemetry[i].kmh;
+    const next = telemetry[(i + 1) % m].kmh;
+    if (cur <= prev && cur <= next && (cur < prev || cur < next)) out.push(i);
+  }
+  return out.length ? out : telemetry.map((_, i) => i);
 }
 
 /** A named stretch of track at an arc-length distance (for the on-screen readout). */
@@ -172,11 +185,9 @@ export interface TelemetrySector {
 }
 
 /**
- * Place every named telemetry station at its true arc-length position so the UI
- * can show which sector a car is in. The matched corners are exact anchors; the
- * straights between them are interpolated through a piecewise-linear distance→arc
- * remap built from those anchors (plus the start/finish line), which absorbs the
- * non-linear drawing distortion the same way the speed profile does.
+ * Named telemetry stations at their true arc-length positions, so the UI can show
+ * which sector a car is in. Reuses `alignTelemetry` (same geometry as the speed
+ * profile); falls back to raw-distance placement when alignment isn't possible.
  */
 export function telemetrySectors(
   samples: TrackSample[],
@@ -185,27 +196,21 @@ export function telemetrySectors(
   startDist: number,
   lapLengthM: number,
 ): TelemetrySector[] {
-  const matched = matchCorners(samples, telemetry, length, startDist, lapLengthM);
-  // distM → lap-fraction knots: start/finish line + each matched corner apex.
-  const knots = [{ d: 0, f: 0 }];
-  if (matched) for (const c of matched.corners) knots.push({ d: c.distM, f: c.pos });
-  knots.push({ d: lapLengthM, f: 1 });
-  knots.sort((a, b) => a.d - b.d);
+  const aligned = alignTelemetry(samples, telemetry, length, startDist, lapLengthM);
+  const toDist = (pos: number) => (((startDist + pos * length) % length) + length) % length;
 
-  const remap = (distM: number): number => {
-    const d = ((distM % lapLengthM) + lapLengthM) % lapLengthM;
-    let i = 0;
-    while (i < knots.length - 1 && d >= knots[i + 1].d) i++;
-    const a = knots[i];
-    const b = knots[Math.min(i + 1, knots.length - 1)];
-    const t = b.d > a.d ? (d - a.d) / (b.d - a.d) : 0;
-    return ((a.f + (b.f - a.f) * t) % 1 + 1) % 1;
-  };
+  if (aligned) {
+    return aligned
+      .filter((s) => s.label)
+      .map((s) => ({ dist: toDist(s.pos), label: s.label as string, kmh: s.kmh, gear: s.gear }))
+      .sort((a, b) => a.dist - b.dist);
+  }
 
+  const startFrac = startDist / length;
   return telemetry
     .filter((p) => p.label)
     .map((p) => ({
-      dist: (((startDist + remap(p.distM) * length) % length) + length) % length,
+      dist: toDist((((startFrac + p.distM / lapLengthM) % 1) + 1) % 1),
       label: p.label as string,
       kmh: p.kmh,
       gear: p.gear,
@@ -228,35 +233,17 @@ function nearestSampleIndex(samples: TrackSample[], dist: number): number {
   return lo;
 }
 
-/** Telemetry stations that are local speed minima around the lap (brake points). */
-function speedMinima(telemetry: TelemetryPoint[]): TelemetryPoint[] {
-  const m = telemetry.length;
-  if (m <= 2) return telemetry.slice();
-  const out: TelemetryPoint[] = [];
-  for (let i = 0; i < m; i++) {
-    const prev = telemetry[(i - 1 + m) % m].kmh;
-    const cur = telemetry[i].kmh;
-    const next = telemetry[(i + 1) % m].kmh;
-    if (cur <= prev && cur <= next && (cur < prev || cur < next)) out.push(telemetry[i]);
-  }
-  return out.length ? out : telemetry.slice();
-}
-
-/** A detected corner: peak sample index, its high-curvature region [lo,hi] (may
- *  wrap), and its normalised lap position measured from the start/finish line. */
+/** A detected corner: peak sample index and its normalised lap position (from the
+ *  start/finish line). */
 interface CornerPeak {
   idx: number;
-  lo: number;
-  hi: number;
   pos: number;
 }
 
 /**
  * Curvature peaks = corner apices. Smooths curvature, keeps prominent local
- * maxima, merges those closer than a min lap-gap, and grows each into the
- * contiguous region where curvature stays above half its peak (the corner's
- * slow floor). Positions are normalised from the start/finish line so they share
- * the telemetry's coordinate.
+ * maxima, and merges those closer than a min lap-gap. Positions are normalised
+ * from the start/finish line so they share the telemetry's coordinate.
  */
 function curvaturePeaks(
   samples: TrackSample[],
@@ -295,14 +282,9 @@ function curvaturePeaks(
 
   return (
     merged
-      .map(({ idx, c }) => {
-        const floor = c * 0.5;
-        let lo = idx;
-        while (sm[(lo - 1 + n) % n] >= floor && (lo - 1 + n) % n !== idx) lo = (lo - 1 + n) % n;
-        let hi = idx;
-        while (sm[(hi + 1) % n] >= floor && (hi + 1) % n !== idx) hi = (hi + 1) % n;
+      .map(({ idx }) => {
         const rel = ((samples[idx].dist - startDist) % length + length) % length;
-        return { idx, lo, hi, pos: rel / length };
+        return { idx, pos: rel / length };
       })
       // Peaks come out in sample-index order (from the SVG path start); the match
       // needs them ordered from the start/finish line, like the telemetry.
@@ -311,17 +293,15 @@ function curvaturePeaks(
 }
 
 /**
- * Assign each telemetry brake point a geometric corner, preserving lap order and
- * minimising total positional displacement (a small DP). Corners may be skipped
- * (more geometric corners than brake points); a brake point left unmatched
- * returns -1. Absorbs the non-linear drawing distortion because it matches by
- * *order*, not absolute distance.
+ * Assign each corner apex a geometric corner, preserving lap order and minimising
+ * total positional displacement (a small DP). Geometric corners may be skipped
+ * (more peaks than apices); an apex left unmatched returns -1. Absorbs the
+ * non-linear drawing distortion because it matches by *order*, not absolute distance.
  */
 function monotonicMatch(tele: number[], geom: number[]): number[] {
   const T = tele.length;
   const G = geom.length;
-  const SKIP = 1; // penalty for leaving a brake point unmatched
-  const INF = Infinity;
+  const SKIP = 1; // penalty for leaving an apex unmatched
   // dp[t][g] = best cost matching tele[t..] using geom[g..].
   const dp: number[][] = Array.from({ length: T + 1 }, () => new Array<number>(G + 1).fill(0));
   const choice: number[][] = Array.from({ length: T + 1 }, () => new Array<number>(G + 1).fill(0));
@@ -342,7 +322,7 @@ function monotonicMatch(tele: number[], geom: number[]): number[] {
         best = skipTele;
         ch = -1; // leave tele[t] unmatched
       }
-      dp[t][g] = best === INF ? INF : best;
+      dp[t][g] = best;
       choice[t][g] = ch;
     }
   }
@@ -371,11 +351,8 @@ function monotonicMatch(tele: number[], geom: number[]): number[] {
 }
 
 /**
- * Telemetry is used to *calibrate* (not position) the model: the speed→gear
- * relationship and the real km/h range. Corner POSITIONS come from the track
- * geometry (the speed profile dips where the track actually bends), which is
- * exactly aligned by construction — far more robust than trying to line up
- * telemetry distances with an arbitrarily-scaled SVG centreline.
+ * Telemetry calibrates the model: the real km/h range (for the speed readout) and
+ * the speed→gear relationship. Corner *positions* come from the geometry.
  */
 export function telemetrySpeedRange(telemetry: TelemetryPoint[]): [number, number] {
   const kmhs = telemetry.map((t) => t.kmh);
@@ -385,10 +362,10 @@ export function telemetrySpeedRange(telemetry: TelemetryPoint[]): [number, numbe
 /**
  * Gear boundaries (8 ascending relSpeed upper edges) from the telemetry (speed,
  * gear) pairs. The km/h are mapped onto [vMin,vMax] (slowest corner → vMin, top
- * speed → vMax), the same range the curvature speed profile uses, so a sample's
- * speed maps to the gear that telemetry uses at that speed. The edge between gear
- * g and g+1 sits midway between the fastest point still in gear ≤g and the
- * slowest in gear >g; a gear never seen (e.g. 1st at Monza) gets a −∞ edge.
+ * speed → vMax), the same range the speed profile uses, so a sample's speed maps
+ * to the gear that telemetry uses at that speed. The edge between gear g and g+1
+ * sits midway between the fastest point still in gear ≤g and the slowest in gear
+ * >g; a gear never seen (e.g. 1st at Monza) gets a −∞ edge.
  */
 export function gearBoundsFromTelemetry(
   telemetry: TelemetryPoint[],

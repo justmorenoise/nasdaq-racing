@@ -33,24 +33,26 @@ to draw. Keep these layers decoupled — the sim must never import from `render/
 - **`track/`** — A track is a closed centerline polyline → arc-length + per-sample tangent/normal/curvature
   (finite differences in `Track.buildSamples`). `speedProfile.ts` builds the local speed profile from
   per-circuit **telemetry** when present (`telemetria` + `lunghezza_metri` in circuits.json →
-  `track/telemetry.ts`). A circuit SVG is a stylised drawing, so its arc-length is **not** a linear function
-  of real track distance — positioning brake zones by raw `distM` lands them on the wrong stretch of tarmac
-  (at Monza the first chicane sits ~250 m *ahead* of where `distM/lapLength` predicts, the Parabolica ~400 m
-  *behind*); positioning purely by curvature fails the other way (the SVG draws the fast Parabolica as tight
-  as the slow chicane → wrong gears). So the two concerns are **split**: **positions come from the geometry**
-  (corner = curvature peak, aligned by construction) and **speeds/gears come from the telemetry**. The
-  telemetry's brake points (local speed minima) are matched to the geometric corners *in lap order* (a
-  monotonic least-displacement assignment, `monotonicMatch`, that absorbs the non-linear drawing distortion).
-  Then two caps build the profile: a **per-segment ceiling** (between two consecutive corners the car only
-  reaches the *fastest telemetry speed recorded in that stretch* — so a short straight between two slow corners,
-  e.g. Roggia→Lesmo, keeps a mid gear instead of snapping to top speed/8th, while a real straight still tops
-  out, keeping **8th on the genuine fast sections only**), and a **corner floor** (each corner's high-curvature
-  region capped at its telemetry speed). The forward/backward accel/brake passes then grow the approach/exit,
-  so the car holds the segment's top gear and brakes late into the corner, **in the telemetry gear, exactly
-  where the track actually bends**. `telemetrySectors` places every named station at its arc position (corners
-  are exact anchors, straights interpolated through a piecewise-linear distance→arc remap) so `Track.sectorAt`
-  can name the stretch a car is in. `CONFIG.profile.accel` is deliberately gentle (3) so upshifts spread over
-  distance (long top gears) and 8th engages near the start/finish line, not way before it.
+  `track/telemetry.ts`). The telemetry stations **are** the profile: the real speed at a sequence of points
+  around the lap (apices, plus — where the data provides them — the `Staccata`/`Ingresso`/`Frenata`
+  braking/approach points that shape each corner). So the profile is a **direct interpolation** of those speeds
+  (`telemetryBaseProfile` → `interpCircular`), and `computeSpeedProfile` **skips its accel/brake passes** for
+  telemetry circuits (they would pull straights back below their data speed and erase the late braking the data
+  encodes). This is why every named station shows its telemetry gear — a slow corner on a long deceleration
+  (Monaco's Massenet) and a short straight between corners (the Monaco tunnel) are both reproduced, and gear
+  changes are never skipped. The only hard part is *where* each station sits: a circuit SVG is a stylised
+  drawing, so its arc-length is **not** a linear function of real track distance (at Monza the first chicane
+  sits ~250 m *ahead* of where `distM/lapLength` predicts, the Parabolica ~400 m *behind*). So the corner
+  apices (telemetry speed minima) are matched to the geometric corners (curvature peaks) *in lap order*
+  (`alignTelemetry` → `monotonicMatch`, a monotonic least-displacement assignment that absorbs the distortion),
+  and those matched pairs anchor a piecewise-linear distance→arc remap that places every other station. So the
+  profile passes through each station's speed exactly, where the track actually bends. `telemetrySectors` reuses
+  the same alignment so `Track.sectorAt` names the stretch a car is in. Denser telemetry = a more faithful
+  profile (it's pure interpolation), so adding `Staccata`/approach points to a circuit sharpens its braking.
+  Because the passes are skipped for telemetry, `CONFIG.profile.accel`/`brake` now affect **only** the
+  non-telemetry curvature path (the hand-made oval). Note the speed→gear map can't resolve a telemetry *speed
+  inversion* (Monza: Biassono 310 km/h in 8th vs the Parabolica exit 320 km/h in 7th) — those two read one gear
+  off, harmlessly.
   Without telemetry it falls back to **curvature** (`severity = (κ/κ_ref)^corneringExp`,
   `v = vMax−(vMax−vMin)·severity`). Lap time is **not** affected by the profile shape — `RaceModel` scales pace by
   `rawLapTime/baseLapTime`, so the leader always laps in `baseLapTime`; retuning `vMin`/`corneringExp` only

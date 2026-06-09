@@ -96,18 +96,25 @@ export function computeSpeedProfile(
     : DEFAULT_SPEED_RANGE_KMH;
 
   // Accel/brake limiting in lap-fraction space, twice around the closed loop.
-  for (let pass = 0; pass < 2; pass++) {
-    for (let s = 0; s < n; s++) {
-      const i = s % n;
-      const prev = (i - 1 + n) % n;
-      const dsFrac = segLen[prev] / total;
-      v[i] = Math.min(v[i], Math.sqrt(v[prev] * v[prev] + 2 * accel * dsFrac));
-    }
-    for (let s = 0; s < n; s++) {
-      const i = (n - 1 - (s % n) + n) % n;
-      const next = (i + 1) % n;
-      const dsFrac = segLen[i] / total;
-      v[i] = Math.min(v[i], Math.sqrt(v[next] * v[next] + 2 * brake * dsFrac));
+  // The TELEMETRY profile is a direct interpolation of the real per-corner speeds
+  // (including the data's own braking/approach points), so it must pass through
+  // every data point untouched — the passes would pull straights back down below
+  // their telemetry speed and erase late-braking. Only the CURVATURE profile (a
+  // raw corner-severity shape) needs the passes to grow realistic approach/exit.
+  if (!useTelemetry) {
+    for (let pass = 0; pass < 2; pass++) {
+      for (let s = 0; s < n; s++) {
+        const i = s % n;
+        const prev = (i - 1 + n) % n;
+        const dsFrac = segLen[prev] / total;
+        v[i] = Math.min(v[i], Math.sqrt(v[prev] * v[prev] + 2 * accel * dsFrac));
+      }
+      for (let s = 0; s < n; s++) {
+        const i = (n - 1 - (s % n) + n) % n;
+        const next = (i + 1) % n;
+        const dsFrac = segLen[i] / total;
+        v[i] = Math.min(v[i], Math.sqrt(v[next] * v[next] + 2 * brake * dsFrac));
+      }
     }
   }
 
