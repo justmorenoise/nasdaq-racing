@@ -2,6 +2,7 @@
   {
     "circuito": "Catalunya",
     "tempo_secondi": 75.743,
+    "lunghezza_metri": 4657,
     "file": "catalunya-6b.svg",
     "verso": "cw",
     "distribuzione_marce": {
@@ -13,11 +14,25 @@
       "6": 15.0,
       "7": 17.0,
       "8": 15.0
-    }
+    },
+    "telemetria": [
+      {"punto": "Rettilineo Principale", "distanza_metri": 300, "velocita_kmh": 325, "marcia": 8},
+      {"punto": "Turn 1-2 (Elf)", "distanza_metri": 750, "velocita_kmh": 140, "marcia": 3},
+      {"punto": "Turn 3 (Renault)", "distanza_metri": 1100, "velocita_kmh": 240, "marcia": 6},
+      {"punto": "Turn 4 (Repsol)", "distanza_metri": 1400, "velocita_kmh": 130, "marcia": 3},
+      {"punto": "Turn 5", "distanza_metri": 1650, "velocita_kmh": 105, "marcia": 3},
+      {"punto": "Turn 7-8", "distanza_metri": 2100, "velocita_kmh": 155, "marcia": 4},
+      {"punto": "Turn 9 (Campsa)", "distanza_metri": 2500, "velocita_kmh": 230, "marcia": 6},
+      {"punto": "Turn 10 (La Caixa)", "distanza_metri": 2900, "velocita_kmh": 85, "marcia": 2},
+      {"punto": "Turn 12", "distanza_metri": 3500, "velocita_kmh": 135, "marcia": 3},
+      {"punto": "Turn 13-14", "distanza_metri": 4100, "velocita_kmh": 90, "marcia": 2},
+      {"punto": "Uscita Nuova Chicane", "distanza_metri": 4300, "velocita_kmh": 280, "marcia": 7}
+    ]
   },
   {
     "circuito": "Interlagos",
     "tempo_secondi": 72.400,
+    "lunghezza_metri": 4309,
     "file": "interlagos-2b.svg",
     "verso": "ccw",
     "distribuzione_marce": {
@@ -29,11 +44,26 @@
       "6": 12.0,
       "7": 16.0,
       "8": 15.0
-    }
+    },
+    "telemetria": [
+      {"punto": "Reta dos Boxes", "distanza_metri": 200, "velocita_kmh": 330, "marcia": 8},
+      {"punto": "S do Senna (Turn 1-2)", "distanza_metri": 550, "velocita_kmh": 100, "marcia": 2},
+      {"punto": "Curva do Sol (Turn 3)", "distanza_metri": 900, "velocita_kmh": 240, "marcia": 6},
+      {"punto": "Reta Oposta", "distanza_metri": 1300, "velocita_kmh": 320, "marcia": 8},
+      {"punto": "Descida do Lago (Turn 4-5)", "distanza_metri": 1700, "velocita_kmh": 140, "marcia": 4},
+      {"punto": "Ferradura (Turn 6-7)", "distanza_metri": 2150, "velocita_kmh": 210, "marcia": 5},
+      {"punto": "Laranjinha (Turn 8)", "distanza_metri": 2400, "velocita_kmh": 130, "marcia": 3},
+      {"punto": "Pinheirinho (Turn 9)", "distanza_metri": 2600, "velocita_kmh": 95, "marcia": 2},
+      {"punto": "Bico de Pato (Turn 10)", "distanza_metri": 2800, "velocita_kmh": 85, "marcia": 2},
+      {"punto": "Mergulho (Turn 11)", "distanza_metri": 3100, "velocita_kmh": 175, "marcia": 4},
+      {"punto": "Junção (Turn 12)", "distanza_metri": 3400, "velocita_kmh": 110, "marcia": 3},
+      {"punto": "Subida dos Boxes", "distanza_metri": 3900, "velocita_kmh": 290, "marcia": 7}
+    ]
   },
   {
     "circuito": "Monaco",
     "tempo_secondi": 73.221,
+    "lunghezza_metri": 3337,
     "file": "monaco-6b.svg",
     "verso": "cw",
     "scale": 0.6,
@@ -46,11 +76,30 @@
       "6": 10.0,
       "7": 6.0,
       "8": 2.0
-    }
+    },
+    "telemetria": [
+      {"punto": "Rettilineo Box", "distanza_metri": 150, "velocita_kmh": 290, "marcia": 7},
+      {"punto": "Sainte Devote (Turn 1)", "distanza_metri": 350, "velocita_kmh": 90, "marcia": 2},
+      {"punto": "Beau Rivage", "distanza_metri": 650, "velocita_kmh": 260, "marcia": 6},
+      {"punto": "Massenet (Turn 3)", "distanza_metri": 900, "velocita_kmh": 150, "marcia": 4},
+      {"punto": "Casino (Turn 4)", "distanza_metri": 1050, "velocita_kmh": 125, "marcia": 3},
+      {"punto": "Mirabeau Haute (Turn 5)", "distanza_metri": 1300, "velocita_kmh": 75, "marcia": 2},
+      {"punto": "Grand Hotel Hairpin (Turn 6)", "distanza_metri": 1450, "velocita_kmh": 50, "marcia": 1},
+      {"punto": "Mirabeau Bas (Turn 7)", "distanza_metri": 1600, "velocita_kmh": 75, "marcia": 2},
+      {"punto": "Portier (Turn 8)", "distanza_metri": 1750, "velocita_kmh": 80, "marcia": 2},
+      {"punto": "Tunnel", "distanza_metri": 2000, "velocita_kmh": 295, "marcia": 7},
+      {"punto": "Nouvelle Chicane (Turn 10-11)", "distanza_metri": 2350, "velocita_kmh": 75, "marcia": 2},
+      {"punto": "Tabac (Turn 12)", "distanza_metri": 2650, "velocita_kmh": 160, "marcia": 4},
+      {"punto": "Louis Chiron (Turn 13-14)", "distanza_metri": 2800, "velocita_kmh": 195, "marcia": 5},
+      {"punto": "Piscine (Turn 15-16)", "distanza_metri": 2950, "velocita_kmh": 110, "marcia": 3},
+      {"punto": "Rascasse (Turn 17)", "distanza_metri": 3150, "velocita_kmh": 60, "marcia": 1},
+      {"punto": "Anthony Noghes (Turn 18)", "distanza_metri": 3250, "velocita_kmh": 115, "marcia": 3}
+    ]
   },
   {
     "circuito": "Monza",
     "tempo_secondi": 78.792,
+    "lunghezza_metri": 5793,
     "file": "monza-7b.svg",
     "verso": "cw",
     "distribuzione_marce": {
@@ -62,11 +111,25 @@
       "6": 12.0,
       "7": 23.0,
       "8": 38.0
-    }
+    },
+    "telemetria": [
+      {"punto": "Rettilineo dei Box", "distanza_metri": 500, "velocita_kmh": 360, "marcia": 8},
+      {"punto": "Prima Variante (Turn 1-2)", "distanza_metri": 1150, "velocita_kmh": 75, "marcia": 2},
+      {"punto": "Curva Biassono / Grande (Turn 3)", "distanza_metri": 1700, "velocita_kmh": 310, "marcia": 8},
+      {"punto": "Variante della Roggia (Turn 4-5)", "distanza_metri": 2200, "velocita_kmh": 115, "marcia": 3},
+      {"punto": "Curva Lesmo 1 (Turn 6)", "distanza_metri": 2600, "velocita_kmh": 180, "marcia": 5},
+      {"punto": "Curva Lesmo 2 (Turn 7)", "distanza_metri": 2800, "velocita_kmh": 160, "marcia": 5},
+      {"punto": "Rettilineo del Serraglio", "distanza_metri": 3300, "velocita_kmh": 330, "marcia": 8},
+      {"punto": "Variante Ascari (Turn 8-9-10)", "distanza_metri": 3700, "velocita_kmh": 150, "marcia": 4},
+      {"punto": "Rettilineo opposto", "distanza_metri": 4500, "velocita_kmh": 350, "marcia": 8},
+      {"punto": "Curva Parabolica (Turn 11)", "distanza_metri": 4800, "velocita_kmh": 215, "marcia": 6},
+      {"punto": "Uscita Parabolica", "distanza_metri": 5400, "velocita_kmh": 320, "marcia": 7}
+    ]
   },
   {
     "circuito": "Silverstone",
     "tempo_secondi": 89.337,
+    "lunghezza_metri": 5891,
     "file": "silverstone-8b.svg",
     "verso": "cw",
     "scale": 1,
@@ -80,11 +143,32 @@
       "6": 18.0,
       "7": 21.0,
       "8": 18.0
-    }
+    },
+    "telemetria": [
+      {"punto": "Hamilton Straight", "distanza_metri": 200, "velocita_kmh": 310, "marcia": 7},
+      {"punto": "Abbey (Turn 1)", "distanza_metri": 450, "velocita_kmh": 275, "marcia": 7},
+      {"punto": "Farm (Turn 2)", "distanza_metri": 750, "velocita_kmh": 290, "marcia": 8},
+      {"punto": "Village (Turn 3)", "distanza_metri": 1050, "velocita_kmh": 100, "marcia": 2},
+      {"punto": "The Loop (Turn 4)", "distanza_metri": 1250, "velocita_kmh": 85, "marcia": 2},
+      {"punto": "Aintree (Turn 5)", "distanza_metri": 1500, "velocita_kmh": 190, "marcia": 5},
+      {"punto": "Wellington Straight", "distanza_metri": 2000, "velocita_kmh": 320, "marcia": 8},
+      {"punto": "Brooklands (Turn 6)", "distanza_metri": 2450, "velocita_kmh": 150, "marcia": 4},
+      {"punto": "Luffield (Turn 7)", "distanza_metri": 2700, "velocita_kmh": 110, "marcia": 3},
+      {"punto": "Woodcote (Turn 8)", "distanza_metri": 3000, "velocita_kmh": 230, "marcia": 6},
+      {"punto": "Copse (Turn 9)", "distanza_metri": 3450, "velocita_kmh": 270, "marcia": 7},
+      {"punto": "Maggots (Turn 10-11)", "distanza_metri": 3950, "velocita_kmh": 295, "marcia": 7},
+      {"punto": "Becketts (Turn 12-13)", "distanza_metri": 4150, "velocita_kmh": 215, "marcia": 5},
+      {"punto": "Chapel (Turn 14)", "distanza_metri": 4400, "velocita_kmh": 245, "marcia": 6},
+      {"punto": "Hangar Straight", "distanza_metri": 4800, "velocita_kmh": 330, "marcia": 8},
+      {"punto": "Stowe (Turn 15)", "distanza_metri": 5250, "velocita_kmh": 195, "marcia": 5},
+      {"punto": "Vale (Turn 16)", "distanza_metri": 5550, "velocita_kmh": 95, "marcia": 2},
+      {"punto": "Club (Turn 17-18)", "distanza_metri": 5750, "velocita_kmh": 130, "marcia": 3}
+    ]
   },
   {
     "circuito": "Spa-Francorchamps",
     "tempo_secondi": 104.861,
+    "lunghezza_metri": 7004,
     "file": "spa-francorchamps-4b.svg",
     "verso": "cw",
     "distribuzione_marce": {
@@ -96,11 +180,28 @@
       "6": 15.0,
       "7": 20.0,
       "8": 25.0
-    }
+    },
+    "telemetria": [
+      {"punto": "Rettilineo Box", "distanza_metri": 200, "velocita_kmh": 310, "marcia": 7},
+      {"punto": "La Source (Turn 1)", "distanza_metri": 500, "velocita_kmh": 75, "marcia": 2},
+      {"punto": "Eau Rouge / Raidillon (Turn 2-4)", "distanza_metri": 1000, "velocita_kmh": 315, "marcia": 8},
+      {"punto": "Kemmel Straight", "distanza_metri": 1600, "velocita_kmh": 340, "marcia": 8},
+      {"punto": "Les Combes (Turn 5-6)", "distanza_metri": 2300, "velocita_kmh": 140, "marcia": 4},
+      {"punto": "Malmedy (Turn 7)", "distanza_metri": 2550, "velocita_kmh": 160, "marcia": 4},
+      {"punto": "Bruxelles (Turn 8)", "distanza_metri": 2900, "velocita_kmh": 105, "marcia": 3},
+      {"punto": "Speaker's Corner (Turn 9)", "distanza_metri": 3200, "velocita_kmh": 150, "marcia": 4},
+      {"punto": "Pouhon (Turn 10-11)", "distanza_metri": 4000, "velocita_kmh": 240, "marcia": 6},
+      {"punto": "Fagnes (Turn 12-13)", "distanza_metri": 4700, "velocita_kmh": 170, "marcia": 4},
+      {"punto": "Stavelot (Turn 14)", "distanza_metri": 5100, "velocita_kmh": 210, "marcia": 5},
+      {"punto": "Courbe Paul Frère (Turn 15)", "distanza_metri": 5500, "velocita_kmh": 260, "marcia": 6},
+      {"punto": "Blanchimont (Turn 16-17)", "distanza_metri": 6200, "velocita_kmh": 325, "marcia": 8},
+      {"punto": "Bus Stop Chicane (Turn 18-19)", "distanza_metri": 6850, "velocita_kmh": 80, "marcia": 2}
+    ]
   },
   {
     "circuito": "Suzuka",
     "tempo_secondi": 90.965,
+    "lunghezza_metri": 5807,
     "file": "suzuka-2b.svg",
     "verso": "cw",
     "scale": 0.5,
@@ -114,6 +215,20 @@
       "6": 16.0,
       "7": 19.0,
       "8": 16.0
-    }
+    },
+    "telemetria": [
+      {"punto": "Rettilineo Principale", "distanza_metri": 300, "velocita_kmh": 315, "marcia": 8},
+      {"punto": "Turn 1-2", "distanza_metri": 650, "velocita_kmh": 240, "marcia": 6},
+      {"punto": "S Curves (Turn 3-6)", "distanza_metri": 1100, "velocita_kmh": 180, "marcia": 5},
+      {"punto": "Dunlop (Turn 7)", "distanza_metri": 1600, "velocita_kmh": 220, "marcia": 6},
+      {"punto": "Degner 1 (Turn 8)", "distanza_metri": 1950, "velocita_kmh": 215, "marcia": 5},
+      {"punto": "Degner 2 (Turn 9)", "distanza_metri": 2100, "velocita_kmh": 125, "marcia": 3},
+      {"punto": "Hairpin (Turn 11)", "distanza_metri": 2600, "velocita_kmh": 75, "marcia": 2},
+      {"punto": "200R (Turn 12)", "distanza_metri": 3100, "velocita_kmh": 275, "marcia": 7},
+      {"punto": "Spoon Curve (Turn 13-14)", "distanza_metri": 3700, "velocita_kmh": 145, "marcia": 4},
+      {"punto": "Rettilineo opposto", "distanza_metri": 4400, "velocita_kmh": 320, "marcia": 8},
+      {"punto": "130R (Turn 15)", "distanza_metri": 4900, "velocita_kmh": 310, "marcia": 8},
+      {"punto": "Casio Chicane (Turn 16-17)", "distanza_metri": 5450, "velocita_kmh": 80, "marcia": 2}
+    ]
   }
 ]

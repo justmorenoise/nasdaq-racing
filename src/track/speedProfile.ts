@@ -1,6 +1,15 @@
 import { CONFIG } from "../config";
 import { computeGearBounds, DEFAULT_GEAR_DISTRIBUTION } from "./gearbox";
+import {
+  gearBoundsFromTelemetry,
+  telemetryBaseProfile,
+  telemetrySpeedRange,
+  type TelemetryPoint,
+} from "./telemetry";
 import type { TrackSample } from "./Track";
+
+/** Default speed range (km/h) for the speed readout on tracks without telemetry. */
+const DEFAULT_SPEED_RANGE_KMH: [number, number] = [110, 340];
 
 /**
  * Derive a relative speed profile from track curvature so cars brake for corners
@@ -19,11 +28,17 @@ import type { TrackSample } from "./Track";
  */
 export function computeSpeedProfile(
   samples: TrackSample[],
-  gearDistribution?: number[],
+  opts: {
+    gearDistribution?: number[];
+    telemetry?: TelemetryPoint[];
+    startDist?: number;
+    lapLengthM?: number;
+  } = {},
 ): {
   relSpeeds: number[];
   rawLapTime: number;
   gearBounds: number[];
+  speedRangeKmh: [number, number];
 } {
   const { vMin, vMax, accel, brake, corneringPercentile, corneringExp, smoothing } =
     CONFIG.profile;
@@ -40,20 +55,45 @@ export function computeSpeedProfile(
     total += segLen[i];
   }
 
-  // Smooth curvature to tame finite-difference noise.
-  const curv = smoothCurvature(samples, smoothing);
+  // Base speed profile. With per-circuit TELEMETRY (+ real lap length) the target
+  // speeds are dropped in at their real positions and the accel/brake passes grow
+  // sharp, well-placed braking zones into them. Otherwise speed comes from
+  // CURVATURE (slow where the track bends).
+  const useTelemetry = !!opts.telemetry?.length && !!opts.lapLengthM;
+  let v: number[];
+  if (useTelemetry) {
+    v = telemetryBaseProfile(
+      samples,
+      opts.telemetry!,
+      total,
+      opts.startDist ?? 0,
+      opts.lapLengthM!,
+      vMin,
+      vMax,
+    );
+  } else {
+    const curv = smoothCurvature(samples, smoothing);
+    const kRef = percentile(curv, corneringPercentile) || 1e-6;
+    // Severity exponent: <1 brakes early even for gentle bends, →1 keeps
+    // medium/fast corners near top speed (only the tightest slow).
+    v = curv.map((k) => {
+      const severity = Math.min(1, Math.pow(k / kRef, corneringExp));
+      return vMax - (vMax - vMin) * severity;
+    });
+  }
 
-  // Reference curvature: a high percentile so a single spike doesn't set the
-  // scale. Curvature at/above this maps to vMin.
-  const kRef = percentile(curv, corneringPercentile) || 1e-6;
-
-  // Base cornering speed from relative curvature severity. The exponent shapes
-  // how quickly speed bleeds off with curvature: <1 brakes early even for gentle
-  // bends, →1 keeps medium/fast corners near top speed (only the tightest slow).
-  const v = curv.map((k) => {
-    const severity = Math.min(1, Math.pow(k / kRef, corneringExp)); // 0 straight .. 1 tightest
-    return vMax - (vMax - vMin) * severity;
-  });
+  const gearBounds = useTelemetry
+    ? gearBoundsFromTelemetry(opts.telemetry!, vMin, vMax)
+    : computeGearBounds(
+        v,
+        segLen,
+        total,
+        opts.gearDistribution ?? DEFAULT_GEAR_DISTRIBUTION,
+        vMax,
+      );
+  const speedRangeKmh = useTelemetry
+    ? telemetrySpeedRange(opts.telemetry!)
+    : DEFAULT_SPEED_RANGE_KMH;
 
   // Accel/brake limiting in lap-fraction space, twice around the closed loop.
   for (let pass = 0; pass < 2; pass++) {
@@ -78,16 +118,7 @@ export function computeSpeedProfile(
     rawLapTime += segLen[i] / Math.max(0.5 * (v[i] + v[j]), 1e-6);
   }
 
-  // Gear shift points from this circuit's gear-usage distribution.
-  const gearBounds = computeGearBounds(
-    v,
-    segLen,
-    total,
-    gearDistribution ?? DEFAULT_GEAR_DISTRIBUTION,
-    vMax,
-  );
-
-  return { relSpeeds: v, rawLapTime, gearBounds };
+  return { relSpeeds: v, rawLapTime, gearBounds, speedRangeKmh };
 }
 
 function smoothCurvature(samples: TrackSample[], window: number): number[] {

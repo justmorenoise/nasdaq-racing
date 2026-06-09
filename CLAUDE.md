@@ -31,9 +31,28 @@ to draw. Keep these layers decoupled — the sim must never import from `render/
   `?feed=demo` forces the offline `SimulatedFeed` (mean-reverting random walk). **No other layer knows
   where prices come from.**
 - **`track/`** — A track is a closed centerline polyline → arc-length + per-sample tangent/normal/curvature
-  (finite differences in `Track.buildSamples`). `speedProfile.ts` derives local speed from **curvature**
-  (`severity = (κ/κ_ref)^corneringExp`, `v = vMax−(vMax−vMin)·severity`) with a forward/backward pass to
-  bound accel/braking. Lap time is **not** affected by the profile shape — `RaceModel` scales pace by
+  (finite differences in `Track.buildSamples`). `speedProfile.ts` builds the local speed profile from
+  per-circuit **telemetry** when present (`telemetria` + `lunghezza_metri` in circuits.json →
+  `track/telemetry.ts`). A circuit SVG is a stylised drawing, so its arc-length is **not** a linear function
+  of real track distance — positioning brake zones by raw `distM` lands them on the wrong stretch of tarmac
+  (at Monza the first chicane sits ~250 m *ahead* of where `distM/lapLength` predicts, the Parabolica ~400 m
+  *behind*); positioning purely by curvature fails the other way (the SVG draws the fast Parabolica as tight
+  as the slow chicane → wrong gears). So the two concerns are **split**: **positions come from the geometry**
+  (corner = curvature peak, aligned by construction) and **speeds/gears come from the telemetry**. The
+  telemetry's brake points (local speed minima) are matched to the geometric corners *in lap order* (a
+  monotonic least-displacement assignment, `monotonicMatch`, that absorbs the non-linear drawing distortion).
+  Then two caps build the profile: a **per-segment ceiling** (between two consecutive corners the car only
+  reaches the *fastest telemetry speed recorded in that stretch* — so a short straight between two slow corners,
+  e.g. Roggia→Lesmo, keeps a mid gear instead of snapping to top speed/8th, while a real straight still tops
+  out, keeping **8th on the genuine fast sections only**), and a **corner floor** (each corner's high-curvature
+  region capped at its telemetry speed). The forward/backward accel/brake passes then grow the approach/exit,
+  so the car holds the segment's top gear and brakes late into the corner, **in the telemetry gear, exactly
+  where the track actually bends**. `telemetrySectors` places every named station at its arc position (corners
+  are exact anchors, straights interpolated through a piecewise-linear distance→arc remap) so `Track.sectorAt`
+  can name the stretch a car is in. `CONFIG.profile.accel` is deliberately gentle (3) so upshifts spread over
+  distance (long top gears) and 8th engages near the start/finish line, not way before it.
+  Without telemetry it falls back to **curvature** (`severity = (κ/κ_ref)^corneringExp`,
+  `v = vMax−(vMax−vMin)·severity`). Lap time is **not** affected by the profile shape — `RaceModel` scales pace by
   `rawLapTime/baseLapTime`, so the leader always laps in `baseLapTime`; retuning `vMin`/`corneringExp` only
   changes the corner-vs-straight *spread* (higher `vMin`/`corneringExp` = faster, flatter corners, slightly
   slower straights, same lap time). This makes cars slow in corners and fast on straights **without telemetry**.
@@ -69,20 +88,25 @@ to draw. Keep these layers decoupled — the sim must never import from `render/
   car (P1 in full view, the chased car otherwise) to avoid 20-engine cacophony — an **8-speed gearbox** where
   the engine pitch tracks *revs within the current gear* (the note saws up toward the redline, then drops on
   each upshift and jumps up on a downshift, so shifts are audible), with a fast multi-gear *scalata* burst
-  into corners. The shift points are **per-circuit**: `track.gearBounds` (from `track/gearbox.ts`) turns each
-  circuit's `distribuzione_marce` (gear-usage %, in circuits.json) into speed boundaries — so Monza lives in
-  7th/8th and Monaco in 2nd–4th, and 1st is never used unless a circuit weights it (the hairpin). Plus a tyre
+  into corners. The shift points are **per-circuit** (`track.gearBounds`): derived from the circuit's
+  `telemetria` (real gear per corner) when present, else from `distribuzione_marce` (gear-usage %) via
+  `track/gearbox.ts` — so Monza lives in 7th/8th and Monaco in 2nd–4th, and 1st is never used unless a circuit
+  weights it (the hairpin). A debug `CONFIG.debug.showGear` badge (the **info_view**, sized to the minimap,
+  stacked between minimap and the Live pill) shows the focused car's gear + km/h (`track.speedRangeKmh`) on the
+  first line and the current telemetry sector name (`track.sectorAt`, "(Turn …)" suffix stripped) on a second
+  line. Plus a tyre
   screech on corner braking, a
   crowd swell when passing a grandstand (`Scenery.grandstandDists`), and a team-radio blip on an overtake.
   Off by default; the 🔊 toggle in `Controls` builds the `AudioContext` on the first click (autoplay policy).
 - **`ui/`** — DOM overlays above the canvas (easier to style than canvas text), inside `.ui-overlay`
   (pointer-events pass through except on widgets). `Leaderboard` (live price/Δ/Δ%, ordered by **race
-  position** = `model.order` so it matches on-track order; click row → Chase that car), `BattleBar`
-  (clickable "Battle X vs Y" chips, bottom-center), `Controls` (Full-view button, auto-director toggle,
-  track `<select>`, label toggle, 🔊 sound toggle, `StockSelector` toggle, default top 20). `RaceHud`
-  (status pill top-right, chase gap readout bottom, podium — now with a **Driver of the Day** row).
-  `Commentary.ts` is a "race radio" feed (top-center): rate-limited one-liners from leader changes,
-  battles, overtakes and big % moves. The P1 car gets a gold label + ring (`CarView`).
+  position** = `model.order` so it matches on-track order; click row → Chase that car), `Controls`
+  (Full-view button, auto-director toggle, track `<select>`, label toggle, 🔊 sound toggle, `StockSelector`
+  toggle, default top 20). `RaceHud` (status/"Live" pill top-right, chase gap readout bottom, podium — with
+  a **Driver of the Day** row). `Commentary.ts` is a "race radio" feed (top-right, under the Live pill):
+  rate-limited one-liners from leader changes, battles, overtakes and big % moves, with **clickable yellow
+  ticker names** (click → Chase). (`BattleBar.ts` still exists but is no longer mounted — the Live feed
+  superseded it.) The P1 car gets a gold label + ring (`CarView`).
 
 - **`data/`** — `nasdaq100.ts` defines the stock universe: `NASDAQ_TOP` (the default top 20, with
   per-symbol display colors/base prices) and `DEFAULT_SYMBOLS`. This is the seed list `main.ts` passes

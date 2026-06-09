@@ -18,7 +18,6 @@ import { loadGridSelection, saveGridSelection } from "./data/gridState";
 import { Leaderboard } from "./ui/Leaderboard";
 import { Controls } from "./ui/Controls";
 import { StockSelector } from "./ui/StockSelector";
-import { BattleBar } from "./ui/BattleBar";
 import { Commentary } from "./ui/Commentary";
 import { detectBattles } from "./sim/battles";
 import { RaceClock } from "./sim/RaceClock";
@@ -177,8 +176,7 @@ async function boot() {
       location.search = params.toString();
     },
   });
-  const battleBar = new BattleBar((sym) => camera.follow(sym));
-  const commentary = new Commentary();
+  const commentary = new Commentary((sym) => followManually(sym));
   const raceHud = new RaceHud(track.length, (sym) => camera.follow(sym));
   // Debug-only gear readout for the focused car (hidden unless CONFIG.debug.showGear).
   const gearHud = document.createElement("div");
@@ -188,7 +186,6 @@ async function boot() {
   // mobile, so the rest goes in the overlay here.
   overlay.append(
     controls.el,
-    battleBar.el,
     commentary.el,
     selector.el,
     raceHud.status,
@@ -335,7 +332,16 @@ async function boot() {
     if (CONFIG.debug.showGear) {
       if (focusCar) {
         const gear = gearAtSpeed(focusCar.relSpeed, track.gearBounds);
-        gearHud.textContent = `${focusCar.symbol} · ${gear}ª`;
+        const [kmhMin, kmhMax] = track.speedRangeKmh;
+        const { vMin, vMax } = CONFIG.profile;
+        const kmh = Math.round(
+          kmhMin + ((focusCar.relSpeed - vMin) / (vMax - vMin)) * (kmhMax - kmhMin),
+        );
+        // Drop the redundant "(Turn 1-2)" suffix — the corner is on screen.
+        const sector = track.sectorAt(focusCar.progress).replace(/\s*\(.*\)\s*$/, "");
+        gearHud.innerHTML =
+          `<div class="gear-debug-main">${focusCar.symbol} · ${gear}ª · ${kmh} km/h</div>` +
+          (sector ? `<div class="gear-debug-sector">${sector}</div>` : "");
         gearHud.classList.remove("hidden");
       } else {
         gearHud.classList.add("hidden");
@@ -377,7 +383,6 @@ async function boot() {
       // Keep the mobile circuit's resting height in sync with the row heights.
       updateStage();
       const battles = detectBattles(model.cars.values(), track);
-      battleBar.update(battles);
       if (clk.state === "running") commentary.update(byPct, model.order, battles);
       raceHud.setStatus(clk);
 

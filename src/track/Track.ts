@@ -1,4 +1,5 @@
 import { computeSpeedProfile } from "./speedProfile";
+import { telemetrySectors, type TelemetryPoint, type TelemetrySector } from "./telemetry";
 import { catmullRomPolyline, type Pt } from "./centerline";
 
 export interface TrackDef {
@@ -29,6 +30,13 @@ export interface TrackDef {
    *  used to derive the gearbox shift points for this circuit. From
    *  `distribuzione_marce` in circuits.json; defaults applied if absent. */
   gearDistribution?: number[];
+  /** Per-corner telemetry (speed/gear at distances around the lap). When present
+   *  (with `lapLengthM`) it drives the speed profile and gear boundaries; from
+   *  `telemetria` in circuits.json. */
+  telemetry?: TelemetryPoint[];
+  /** Real lap length in metres (`lunghezza_metri`): scales telemetry distances to
+   *  lap fractions so they align with the geometry. */
+  lapLengthM?: number;
 }
 
 export interface TrackSample {
@@ -155,6 +163,11 @@ export class Track {
   readonly rawLapTime: number;
   /** Gear-boundary speeds (8 ascending relSpeed upper edges) for this circuit. */
   readonly gearBounds: number[];
+  /** [min, max] real speed (km/h) this circuit reaches, for the speed readout. */
+  readonly speedRangeKmh: [number, number];
+  /** Named telemetry sectors at their arc-length positions (empty without
+   *  telemetry), for the on-screen "which corner am I in" readout. */
+  readonly sectors: TelemetrySector[];
   readonly bounds: { minX: number; minY: number; maxX: number; maxY: number };
   /** Arc-length of the start/finish line (0 if no marker is known). */
   readonly startDist: number;
@@ -178,16 +191,28 @@ export class Track {
     this.samples = this.buildSamples(centerline);
     this.length = this.samples[this.samples.length - 1].dist;
 
-    const { relSpeeds, rawLapTime, gearBounds } = computeSpeedProfile(
+    this.bounds = this.computeBounds();
+    // startDist is needed before the profile: telemetry distances are measured
+    // from the start/finish line, so they're offset by it onto our arc-length.
+    this.startDist = this.computeStartDist();
+
+    const { relSpeeds, rawLapTime, gearBounds, speedRangeKmh } = computeSpeedProfile(
       this.samples,
-      def.gearDistribution,
+      {
+        gearDistribution: def.gearDistribution,
+        telemetry: def.telemetry,
+        startDist: this.startDist,
+        lapLengthM: def.lapLengthM,
+      },
     );
     this.samples.forEach((s, i) => (s.relSpeed = relSpeeds[i]));
     this.rawLapTime = rawLapTime;
     this.gearBounds = gearBounds;
-
-    this.bounds = this.computeBounds();
-    this.startDist = this.computeStartDist();
+    this.speedRangeKmh = speedRangeKmh;
+    this.sectors =
+      def.telemetry?.length && def.lapLengthM
+        ? telemetrySectors(this.samples, def.telemetry, this.length, this.startDist, def.lapLengthM)
+        : [];
 
     if (def.edgeLoops) {
       const e = this.computeEdges(def.edgeLoops);
@@ -444,6 +469,23 @@ export class Track {
       nx: a.nx + (b.nx - a.nx) * f,
       ny: a.ny + (b.ny - a.ny) * f,
     };
+  }
+
+  /** Name of the telemetry sector nearest an arc-length distance ("" if none). */
+  sectorAt(dist: number): string {
+    if (!this.sectors.length) return "";
+    const d = this.wrap(dist);
+    let best = this.sectors[0].label;
+    let bestGap = Infinity;
+    for (const s of this.sectors) {
+      const raw = Math.abs(s.dist - d);
+      const gap = Math.min(raw, this.length - raw);
+      if (gap < bestGap) {
+        bestGap = gap;
+        best = s.label;
+      }
+    }
+    return best;
   }
 
   /** Relative speed shape at a distance (auto-wrapped). */

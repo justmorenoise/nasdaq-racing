@@ -13,9 +13,11 @@ const svgLoaders = import.meta.glob("/circuits/*.svg", {
   import: "default",
 }) as Record<string, () => Promise<string>>;
 
-const lapTimes = lapData as {
+interface TrackEntry {
   circuito: string;
   tempo_secondi: number;
+  /** Real lap length in metres (for aligning telemetry distances). */
+  lunghezza_metri?: number;
   file?: string;
   verso?: "cw" | "ccw";
   /** Per-circuit size lever: multiplies fallback width and car size (default 1). */
@@ -26,12 +28,27 @@ const lapTimes = lapData as {
   width?: number;
   /** Gear-usage distribution: % of the lap per gear, keyed "1".."8". */
   distribuzione_marce?: Record<string, number>;
-}[];
+  /** Per-corner telemetry: speed (km/h) + gear at distances around the lap. */
+  telemetria?: { punto?: string; distanza_metri: number; velocita_kmh: number; marcia: number }[];
+}
+
+const lapTimes = lapData as TrackEntry[];
 
 /** Turn the circuits.json gear map {"1":…,"8":…} into an ordered [g1..g8] array. */
 function gearArray(d?: Record<string, number>): number[] | undefined {
   if (!d) return undefined;
   return Array.from({ length: 8 }, (_, i) => d[String(i + 1)] ?? 0);
+}
+
+/** Map circuits.json telemetry rows to the internal TelemetryPoint shape. */
+function telemetryPoints(rows?: TrackEntry["telemetria"]) {
+  if (!rows?.length) return undefined;
+  return rows.map((r) => ({
+    label: r.punto,
+    distM: r.distanza_metri,
+    kmh: r.velocita_kmh,
+    gear: r.marcia,
+  }));
 }
 
 const DEFAULT_WIDTH = 54;
@@ -71,6 +88,8 @@ const svgTracks: TrackDef[] = lapTimes
       kerbScale: entry.kerbScale ?? 1,
       verso: entry.verso,
       gearDistribution: gearArray(entry.distribuzione_marce),
+      telemetry: telemetryPoints(entry.telemetria),
+      lapLengthM: entry.lunghezza_metri,
     };
   })
   .sort((a, b) => {
