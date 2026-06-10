@@ -162,18 +162,26 @@ function alignTelemetry(
   return stations;
 }
 
-/** Telemetry stations that are local speed minima around the lap (corner apices). */
+/**
+ * Telemetry stations that are local speed minima around the lap (corner apices).
+ * Only **named** stations count: unlabeled rows are gear-anchor helper points (they
+ * pin `gearBounds`/refine straight speeds), and a low-speed anchor sitting between
+ * faster neighbours would otherwise read as a false apex and get matched to a
+ * curvature peak, corrupting the distance→arc alignment. Indices are into the full
+ * `telemetry` array. Comparison uses each named station's named neighbours.
+ */
 function speedMinimaIndices(telemetry: TelemetryPoint[]): number[] {
-  const m = telemetry.length;
-  if (m <= 2) return telemetry.map((_, i) => i);
+  const named = telemetry.map((_, i) => i).filter((i) => telemetry[i].label);
+  const m = named.length;
+  if (m <= 2) return named;
   const out: number[] = [];
-  for (let i = 0; i < m; i++) {
-    const prev = telemetry[(i - 1 + m) % m].kmh;
-    const cur = telemetry[i].kmh;
-    const next = telemetry[(i + 1) % m].kmh;
-    if (cur <= prev && cur <= next && (cur < prev || cur < next)) out.push(i);
+  for (let k = 0; k < m; k++) {
+    const prev = telemetry[named[(k - 1 + m) % m]].kmh;
+    const cur = telemetry[named[k]].kmh;
+    const next = telemetry[named[(k + 1) % m]].kmh;
+    if (cur <= prev && cur <= next && (cur < prev || cur < next)) out.push(named[k]);
   }
-  return out.length ? out : telemetry.map((_, i) => i);
+  return out.length ? out : named;
 }
 
 /** A named stretch of track at an arc-length distance (for the on-screen readout). */
