@@ -7,6 +7,7 @@ import { loadGrassBackground } from "./render/textures";
 import { Scenery } from "./render/Scenery";
 import { CarView } from "./render/CarView";
 import { SkidMarks } from "./render/SkidMarks";
+import { SparksLayer } from "./render/SparksLayer";
 import { Camera } from "./render/Camera";
 import { Minimap } from "./render/Minimap";
 import { RaceModel } from "./sim/RaceModel";
@@ -85,7 +86,12 @@ async function boot() {
 
   const carLayer = new Container();
   world.addChild(carLayer);
-  // Labels render above all car bodies so names are never occluded in a pack.
+  // Sparks fly up from car-to-car contact, above the bodies.
+  const sparks = new SparksLayer();
+  world.addChild(sparks.container);
+  // Crane jibs overhang the track, so they sit above the cars, marks and sparks.
+  world.addChild(scenery.cranesLayer);
+  // Labels render above everything so names are never occluded in a pack.
   const labelLayer = new Container();
   world.addChild(labelLayer);
 
@@ -293,9 +299,12 @@ async function boot() {
     if (clk.state === "running") {
       model.update(dt * timeScale);
       skid.update(model.cars.values(), (c) => model.poseForCar(c));
+      sparks.emit(model.contacts, (c) => model.poseForCar(c), dt);
     } else if (clk.state === "finished") {
       raceHud.showPodium(model.order, model.driverOfTheDay());
     }
+    // Always advance sparks so any in-flight particles finish their arc.
+    sparks.update(dt);
 
     // Auto-director: every few seconds, cut to the hottest battle (or leader).
     if (directorOn) {
@@ -353,8 +362,6 @@ async function boot() {
     // Shrink the P1 ring on the reduced mobile circuit so it doesn't dominate.
     const ringScale = stageCollapsed ? 0.5 : 1;
     for (const [sym, car] of model.cars) {
-      // Boost glow decays in real time (independent of sim time-scale).
-      if (car.boost > 0) car.boost = Math.max(0, car.boost - dt * 1.1);
       // Labels follow the global toggle (rendered in a top layer so names in a
       // pack never hide behind another car).
       carViews
@@ -419,6 +426,7 @@ async function boot() {
     model,
     camera,
     track,
+    scenery,
     app,
     frame,
     render: () => app.renderer.render(app.stage),

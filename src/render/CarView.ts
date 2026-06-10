@@ -11,29 +11,24 @@ const SPRITE_ROT = -Math.PI / 2;
 
 /**
  * One car: a tinted top-view F1 sprite (from car.svg) that rotates with heading,
- * plus a boost aura, a leader ring, and a ticker label that stays upright at a
- * constant screen size.
+ * plus a leader ring, and a ticker label that stays upright at a constant screen
+ * size.
  */
 export class CarView {
   readonly root = new Container();
   private body = new Container();
   private sprite = new Sprite();
-  private aura = new Graphics();
   private leaderRing = new Graphics();
   private momentumRing = new Graphics();
   private label: Text;
   private isLeader = false;
 
   constructor(
-    private car: Car,
+    car: Car,
     labelLayer: Container,
     /** Per-track size lever (default 1): scales the car art and its markers. */
     private scale = 1,
   ) {
-    this.aura.circle(0, 0, CAR_LEN * this.scale * 0.6).fill({ color: car.color, alpha: 1 });
-    this.aura.alpha = 0;
-    this.root.addChild(this.aura);
-
     this.leaderRing.circle(0, 0, CAR_LEN * this.scale * 0.62).stroke({
       width: 2,
       color: 0xffd23f,
@@ -103,10 +98,6 @@ export class CarView {
   ): void {
     this.root.position.set(pose.x, pose.y);
     this.body.rotation = pose.tangent;
-    // Boost glow: pulse alpha + scale with the car's transient boost value.
-    const b = this.car.boost;
-    this.aura.alpha = b * 0.55;
-    this.aura.scale.set(0.8 + b * 0.5);
 
     if (isLeader !== this.isLeader) {
       this.isLeader = isLeader;

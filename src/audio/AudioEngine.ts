@@ -1,15 +1,17 @@
 import { CONFIG } from "../config";
 import type { Car } from "../sim/Car";
 import type { Track } from "../track/Track";
+import crowdUrl from "../../circuits/crowd.mp3?url";
 
 /**
- * Fully synthesized race audio (no asset files) for a SINGLE focused car, to
- * avoid a cacophony of twenty engines: the leader in full view, or the chased
- * car when one is followed. Everything is generated with the Web Audio API —
+ * Mostly-synthesized race audio for a SINGLE focused car, to avoid a cacophony
+ * of twenty engines: the leader in full view, or the chased car when one is
+ * followed. Generated with the Web Audio API —
  *  - a continuous engine note whose pitch/volume track the car's speed,
  *  - a tyre screech on hard corner braking,
- *  - a crowd swell when passing a grandstand,
  *  - a "team radio" blip (bandpassed beep) on a boost/overtake.
+ * — plus one real sample, `crowd.mp3`, that fades in as the car nears a
+ * grandstand and fades out as it leaves (see CROWD_* below).
  *
  * The context is created lazily on the first enable (a user gesture), per the
  * browser autoplay policy. `enabled` is the on/off toggle; when off the master
@@ -23,8 +25,14 @@ const ENGINE_MIN_HZ = 180;
 const ENGINE_MAX_HZ = 500;
 const BRAKE_REL_NORM = 0.32; // below this normalised speed (and slowing) → screech
 const BRAKE_COOLDOWN = 0.9; // s
-const CROWD_WINDOW = 90; // world units around a grandstand to trigger a cheer
-const CROWD_COOLDOWN = 2.5; // s per pass
+// Crowd cheer (crowd.mp3) plays continuously while the focused car is within
+// CROWD_WINDOW of ANY grandstand, so a row of consecutive stands reads as one
+// unbroken cheer; it only fades out once the car is past the last stand. The
+// clip loops silently in the background and these knobs shape the fade envelope.
+const CROWD_WINDOW = 150; // world units: how close counts as "at a grandstand"
+const CROWD_FADE_IN = 1.0; // s ramp-up as the car reaches the first stand
+const CROWD_FADE_OUT = 1.8; // s ramp-down once past the last stand
+const CROWD_GAIN = 0.6; // crowd level while alongside the stands
 const RADIO_COOLDOWN = 4; // s
 const GEARS = 8; // 1..8
 const SHIFT_HYST = 0.006; // relSpeed deadband so a car at a boundary won't chatter
@@ -39,11 +47,14 @@ export class AudioEngine {
   private osc!: OscillatorNode;
   private sub!: OscillatorNode;
   private noiseBuffer!: AudioBuffer;
+  private crowdBuffer: AudioBuffer | null = null;
+  private crowdGain!: GainNode;
+  private crowdSource: AudioBufferSourceNode | null = null;
+  private crowdOn = false;
 
   private prevRel = 1;
   private gear = 1;
   private lastBrake = -Infinity;
-  private lastCrowd = -Infinity;
   private lastRadio = -Infinity;
   private prevOvertakes = 0;
 
@@ -86,11 +97,27 @@ export class AudioEngine {
     this.osc.start();
     this.sub.start();
 
-    // One white-noise buffer reused for screech / crowd / radio bursts.
+    // One white-noise buffer reused for screech / radio bursts.
     const len = ctx.sampleRate * 1.5;
     this.noiseBuffer = ctx.createBuffer(1, len, ctx.sampleRate);
     const data = this.noiseBuffer.getChannelData(0);
     for (let i = 0; i < len; i++) data[i] = Math.random() * 2 - 1;
+
+    // Crowd-cheer bus: a looping sample (started once the clip decodes) whose
+    // gain is opened/closed by proximity to the stands.
+    this.crowdGain = ctx.createGain();
+    this.crowdGain.gain.value = 0;
+    this.crowdGain.connect(this.master);
+    void this.loadCrowd(ctx);
+  }
+
+  private async loadCrowd(ctx: AudioContext): Promise<void> {
+    try {
+      const res = await fetch(crowdUrl);
+      this.crowdBuffer = await ctx.decodeAudioData(await res.arrayBuffer());
+    } catch {
+      /* crowd clip is optional; the rest of the audio still works */
+    }
   }
 
   /**
@@ -103,6 +130,7 @@ export class AudioEngine {
 
     if (!car) {
       this.engineGain.gain.setTargetAtTime(0.0001, t, 0.1);
+      this.setCrowd(false, t); // no focused car → let the crowd fade out
       return;
     }
 
@@ -147,17 +175,20 @@ export class AudioEngine {
     }
     this.prevRel = car.relSpeed;
 
-    // Crowd cheer when passing a grandstand.
+    // Crowd cheer: on whenever the car is within range of ANY grandstand, so a
+    // run of consecutive stands stays one continuous cheer, only fading out once
+    // the car is clear of the last stand of the row.
     const pos = track.wrap(car.progress);
-    if (t - this.lastCrowd > CROWD_COOLDOWN) {
-      for (const d of grandstandDists) {
-        if (Math.abs(pos - d) < CROWD_WINDOW) {
-          this.lastCrowd = t;
-          this.burst(900, 0.8, 0.12, 1.1, "lowpass");
-          break;
-        }
+    const L = track.length;
+    let near = false;
+    for (const d of grandstandDists) {
+      const dd = Math.abs(pos - d);
+      if (Math.min(dd, L - dd) < CROWD_WINDOW) {
+        near = true;
+        break;
       }
     }
+    this.setCrowd(near, t);
 
     // Team-radio blip on a fresh overtake by the focused car.
     if (car.overtakes > this.prevOvertakes && t - this.lastRadio > RADIO_COOLDOWN) {
@@ -167,7 +198,30 @@ export class AudioEngine {
     this.prevOvertakes = car.overtakes;
   }
 
-  /** A filtered noise burst (screech / crowd) with attack + exponential decay. */
+  /**
+   * Open or close the continuous crowd cheer. The looping sample is started on
+   * first use (once decoded); only a state change triggers a fade, so a row of
+   * stands holds one steady cheer until the car clears the last one.
+   */
+  private setCrowd(on: boolean, t: number): void {
+    if (!this.crowdBuffer) return;
+    if (!this.crowdSource) {
+      const src = this.ctx!.createBufferSource();
+      src.buffer = this.crowdBuffer;
+      src.loop = true;
+      src.connect(this.crowdGain);
+      src.start();
+      this.crowdSource = src;
+    }
+    if (on === this.crowdOn) return;
+    this.crowdOn = on;
+    const g = this.crowdGain.gain;
+    g.cancelScheduledValues(t);
+    g.setValueAtTime(g.value, t);
+    g.linearRampToValueAtTime(on ? CROWD_GAIN : 0, t + (on ? CROWD_FADE_IN : CROWD_FADE_OUT));
+  }
+
+  /** A filtered noise burst (screech) with attack + exponential decay. */
   private burst(freq: number, q: number, gain: number, dur: number, type: BiquadFilterType): void {
     const ctx = this.ctx!;
     const t = ctx.currentTime;

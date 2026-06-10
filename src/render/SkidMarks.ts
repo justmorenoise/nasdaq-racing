@@ -11,7 +11,7 @@ import type { Track } from "../track/Track";
  * own layer between the scenery and the cars.
  */
 const PAD = 60; // world padding around the track bounds
-const TEX_RES = 0.5; // skid texture is low-detail; half-res keeps it light
+const TEX_RES = 1; // native res so the rubber stays crisp, not blocky
 const SKID_REL_SPEED = 0.62; // lay marks below this profile speed (corner braking)
 const STAMP_GAP = 8; // min world distance a car travels between stamps
 
@@ -22,6 +22,9 @@ export class SkidMarks {
   private minX: number;
   private minY: number;
   private lastStamp = new Map<string, number>();
+  /** Stable per-car ±1% wobble on the braking threshold, so cars don't all
+   *  start laying rubber at the exact same point (they'd stack into one line). */
+  private threshJitter = new Map<string, number>();
 
   constructor(
     track: Track,
@@ -36,7 +39,7 @@ export class SkidMarks {
 
     const sprite = new Sprite(this.rt);
     sprite.position.set(this.minX, this.minY);
-    sprite.alpha = 0.5;
+    sprite.alpha = 0.125; // subtle: ~75% fainter than the old marks
     this.container.addChild(sprite);
 
     // Two short tyre streaks centred on the origin, pointing along +x (travel
@@ -53,7 +56,13 @@ export class SkidMarks {
   /** Lay rubber for any seeded car braking hard through a corner. */
   update(cars: Iterable<Car>, poseOf: (c: Car) => { x: number; y: number; tangent: number }): void {
     for (const car of cars) {
-      if (!car.seeded || car.relSpeed > SKID_REL_SPEED) continue;
+      if (!car.seeded) continue;
+      let j = this.threshJitter.get(car.symbol);
+      if (j === undefined) {
+        j = (Math.random() * 2 - 1) * 0.01; // ±1%, fixed for the session
+        this.threshJitter.set(car.symbol, j);
+      }
+      if (car.relSpeed > SKID_REL_SPEED * (1 + j)) continue;
       const last = this.lastStamp.get(car.symbol) ?? -Infinity;
       if (car.distance - last < STAMP_GAP) continue;
       this.lastStamp.set(car.symbol, car.distance);

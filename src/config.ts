@@ -80,6 +80,40 @@ export const CONFIG = {
   },
 
   /**
+   * Sparks kicked up when two cars touch (side-by-side on the same stretch).
+   * Intensity is derived from how hard the contact is (closing speed + how far
+   * inside each other their lanes are) and scales the burst size/energy, so the
+   * whole effect can be dialed up or down here.
+   */
+  sparks: {
+    /** Max along-track gap to count as contact (lap-fraction). */
+    contactLongFrac: 0.006,
+    /** Max lateral overlap to count as contact (world units; ~car width). */
+    contactLatUnits: 13,
+    /** Below this normalized intensity [0,1] no sparks are emitted. */
+    minIntensity: 0.12,
+    /** Closing speed (world units/s) that maps to full intensity. */
+    fullClosingSpeed: 90,
+    /** Particles emitted at full intensity (scaled down for softer touches). */
+    particleCount: 14,
+    /** Per-event cooldown so a sustained scrape doesn't spam (seconds). */
+    cooldown: 0.18,
+    /** Particle lifetime range (seconds). */
+    lifeMin: 0.18,
+    lifeMax: 0.5,
+    /** Initial particle speed range (world units/s) at full intensity. */
+    speedMin: 60,
+    speedMax: 220,
+    /** Downward pull on particles (world units/s²) — they arc and settle. */
+    gravity: 320,
+    /** Spread half-angle around the contact tangent (radians). */
+    spread: Math.PI * 0.6,
+    /** Hot core (white) and cooler edge (orange) colours. */
+    colorHot: 0xffffff,
+    colorWarm: 0xffb24a,
+  },
+
+  /**
    * Decorative circuit scenery (render-only): kerbs, gravel run-off, grass,
    * grandstands, pit/paddock, tire walls and cranes — all derived from the
    * track geometry, built once. Curvature is normalized per track (a high
@@ -113,8 +147,12 @@ export const CONFIG = {
     standDepth: 60,
     standGap: 70,
     standSegLen: 150,
-    /** Min straight lap-fraction to host a grandstand. */
-    standMinStraightFrac: 0.08,
+    /** Min straight lap-fraction to host a grandstand (lower = more stands, as
+     *  shorter straights also qualify). */
+    standMinStraightFrac: 0.05,
+    /** Every circuit gets at least this many stands; sparse tracks (Monaco, Spa)
+     *  trigger relaxed fallback passes until they reach it. */
+    minStands: 5,
 
     /** Pit lane + paddock complex along the start/finish straight. Measured from
      *  the real track edge and depth-capped to the infield clearance, so it stays

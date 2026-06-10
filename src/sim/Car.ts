@@ -25,8 +25,6 @@ export class Car {
   targetLane = 0;
   /** Whether the car has been placed into its initial slot. */
   seeded = false;
-  /** Transient glow [0,1] that spikes on a sharp upward move and decays. */
-  boost = 0;
 
   // --- Session stats (drive the momentum/DOTD badges and, later, betting) ---
   /** Seconds spent as the standings leader (P1) this session — "laps led". */

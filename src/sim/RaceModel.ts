@@ -9,6 +9,13 @@ export interface CarPose extends TrackPose {
   car: Car;
 }
 
+/** Two cars touching this frame, with a normalized [0,1] impact intensity. */
+export interface Contact {
+  a: Car;
+  b: Car;
+  intensity: number;
+}
+
 /**
  * Owns the cars and advances the simulation. Speed comes from the track's
  * relative profile scaled by an eased per-car pace, so cars slow in corners and
@@ -18,6 +25,8 @@ export class RaceModel {
   readonly cars = new Map<string, Car>();
   /** Cars sorted best-first (most progress). */
   order: Car[] = [];
+  /** Car-to-car contacts detected this frame (drives the sparks effect). */
+  contacts: Contact[] = [];
   /** Previous frame's on-track rank per symbol, to count overtakes. */
   private prevRank = new Map<string, number>();
 
@@ -70,9 +79,7 @@ export class RaceModel {
     for (const u of updates) {
       const car = this.cars.get(u.symbol);
       if (!car) continue;
-      // A sharp upward move lights up the boost glow.
       const rise = u.changePct - car.changePct;
-      if (rise > 0.12) car.boost = Math.min(1, car.boost + rise * 0.9);
       // Feed the momentum signal with the signed move; it decays in update().
       car.momentum += rise;
       car.changePct = u.changePct;
@@ -146,6 +153,34 @@ export class RaceModel {
 
     for (const car of this.cars.values()) {
       car.lane += (car.targetLane - car.lane) * easeLane;
+    }
+
+    this.detectContacts();
+  }
+
+  /**
+   * Find pairs of cars that are side-by-side on the same stretch (tiny along-track
+   * gap *and* overlapping lanes) and rate the impact. Cars touching are adjacent
+   * in `order`, so a single pass over neighbours covers it.
+   */
+  private detectContacts(): void {
+    this.contacts = [];
+    const s = CONFIG.sparks;
+    const L = this.track.length;
+    const maxLong = L * s.contactLongFrac;
+    const halfW = this.track.def.width / 2;
+    for (let i = 0; i < this.order.length - 1; i++) {
+      const a = this.order[i];
+      const b = this.order[i + 1];
+      if (!a.seeded || !b.seeded) continue;
+      if (a.progress - b.progress > maxLong) continue;
+      const lateral = Math.abs(a.lane - b.lane) * halfW;
+      if (lateral > s.contactLatUnits) continue;
+      const latCloseness = 1 - lateral / s.contactLatUnits; // 1 = right on top
+      const speedFactor = Math.min(1, Math.abs(a.worldSpeed - b.worldSpeed) / s.fullClosingSpeed);
+      const intensity = Math.min(1, (0.35 + 0.65 * speedFactor) * latCloseness);
+      if (intensity < s.minIntensity) continue;
+      this.contacts.push({ a, b, intensity });
     }
   }
 

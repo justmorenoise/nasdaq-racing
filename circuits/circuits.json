@@ -190,7 +190,7 @@
       {"punto": "Staccata Lesmo 1", "distanza_metri": 2434, "velocita_kmh": 255, "marcia": 6},
       {"punto": "Curva Lesmo 1 (Turn 6)", "distanza_metri": 2527, "velocita_kmh": 195, "marcia": 5},
       {"punto": "Staccata Lesmo 2", "distanza_metri": 2771, "velocita_kmh": 265, "marcia": 6},
-      {"punto": "Curva Lesmo 2 (Turn 7)", "distanza_metri": 2839, "velocita_kmh": 180, "marcia": 5},
+      {"punto": "Curva Lesmo 2 (Turn 7)", "distanza_metri": 2839, "velocita_kmh": 180, "marcia": 4},
       {"distanza_metri": 3042, "velocita_kmh": 260, "marcia": 7},
       {"punto": "Rettilineo del Serraglio", "distanza_metri": 3430, "velocita_kmh": 330, "marcia": 8},
       {"punto": "Staccata Ascari", "distanza_metri": 3809, "velocita_kmh": 340, "marcia": 8},

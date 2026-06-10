@@ -86,7 +86,7 @@ to draw. Keep these layers decoupled — the sim must never import from `render/
   `CarView` also draws a purple "fastest lap" ring for the `momentumLeaderSymbol`. `SkidMarks.ts` is a
   persistent rubber-decal layer (between Scenery and the cars): a single world-space `RenderTexture` that
   cars stamp into (`clear:false`) at hard-braking corners, so marks accumulate with bounded memory.
-- **`audio/`** — `AudioEngine.ts`: fully **synthesized** race audio (no asset files) for a *single* focused
+- **`audio/`** — `AudioEngine.ts`: mostly **synthesized** race audio (one sample, `circuits/crowd.mp3`) for a *single* focused
   car (P1 in full view, the chased car otherwise) to avoid 20-engine cacophony — an **8-speed gearbox** where
   the engine pitch tracks *revs within the current gear* (the note saws up toward the redline, then drops on
   each upshift and jumps up on a downshift, so shifts are audible), with a fast multi-gear *scalata* burst
@@ -98,7 +98,9 @@ to draw. Keep these layers decoupled — the sim must never import from `render/
   first line and the current telemetry sector name (`track.sectorAt`, "(Turn …)" suffix stripped) on a second
   line. Plus a tyre
   screech on corner braking, a
-  crowd swell when passing a grandstand (`Scenery.grandstandDists`), and a team-radio blip on an overtake.
+  crowd cheer (`crowd.mp3`) — a looping sample whose gain is **opened while the focused car is within
+  `CROWD_WINDOW` of any grandstand** (`Scenery.grandstandDists`), so a row of consecutive stands reads as
+  one continuous cheer that only **fades out** (over `CROWD_FADE_OUT`) once past the last stand. Plus a team-radio blip on an overtake.
   Off by default; the 🔊 toggle in `Controls` builds the `AudioContext` on the first click (autoplay policy).
 - **`ui/`** — DOM overlays above the canvas (easier to style than canvas text), inside `.ui-overlay`
   (pointer-events pass through except on widgets). `Leaderboard` (live price/Δ/Δ%, ordered by **race

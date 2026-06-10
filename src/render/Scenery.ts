@@ -14,6 +14,9 @@ import { offsetPoint, type TrackLayout } from "../track/corners";
  */
 export class Scenery {
   readonly container = new Container();
+  /** Recovery cranes — kept in a separate layer so they render *above* the
+   *  cars and skid marks (their jibs overhang the track, as in real life). */
+  readonly cranesLayer = new Container();
   /** Arc-length positions of the placed grandstands, for crowd-cheer audio. */
   readonly grandstandDists: number[] = [];
   private cx: number;
@@ -38,7 +41,8 @@ export class Scenery {
 
     this.container.addChild(this.grandstands());
     this.container.addChild(this.pitPaddock());
-    this.container.addChild(this.cranes());
+    // Cranes go in their own layer (added above the cars in main.ts).
+    this.cranesLayer.addChild(this.cranes());
   }
 
   private get half(): number {
@@ -125,53 +129,120 @@ export class Scenery {
     const seatDepth = sc.standDepth * 0.62;
     const roofDepth = sc.standDepth * 0.18;
     const footprint = sc.standGap + seatDepth + roofDepth + 12; // depth from the edge
+
+    // Try to seat a stand outside the track at sample `i`. `minGap` keeps it
+    // clear of stands already placed (0 = no check); `lenFactor` shrinks it to
+    // fit tighter spots. Returns whether a stand was placed.
+    const place = (i: number, minGap = 0, lenFactor = 1): boolean => {
+      const p = s[i];
+      const out = this.outwardSign(p);
+      // Don't sit a stand on the paddock side of the start/finish line…
+      if (this.pitWindow.has(i) && out === this.pitSide) return false;
+      if (minGap > 0) {
+        for (const d of this.grandstandDists) {
+          const dd = Math.abs(p.dist - d);
+          if (Math.min(dd, this.track.length - dd) < minGap) return false;
+        }
+      }
+      const nx = p.nx * out;
+      const ny = p.ny * out;
+      // …or where its depth would reach onto another part of the track.
+      const e0 = this.edgeOffset(i, out, 0);
+      if (this.track.edgeRayDistance(e0.x, e0.y, nx, ny) < footprint) return false;
+
+      const ax = Math.cos(p.tangent);
+      const ay = Math.sin(p.tangent);
+      const halfLen = sc.standSegLen * (0.4 + Math.random() * 0.08) * lenFactor;
+      const at = (d: number) => this.edgeOffset(i, out, d);
+      // Skip if any footprint corner (near apron + far roof, at both ends) would
+      // land on the track — e.g. a stand whose end pokes into the next corner.
+      const alongHalf = halfLen + 5;
+      for (const depth of [sc.standGap - 5, sc.standGap + seatDepth + roofDepth]) {
+        const c = this.edgeOffset(i, out, depth);
+        for (const sgn of [1, -1]) {
+          if (this.track.onAsphalt(c.x + ax * alongHalf * sgn, c.y + ay * alongHalf * sgn)) {
+            return false;
+          }
+        }
+      }
+
+      this.grandstandDists.push(p.dist);
+
+      // Tarmac apron + front barrier, the seating bank, then a thin back roof,
+      // all measured outward from the real track edge.
+      const apron = at(sc.standGap - 5);
+      this.rect(g, apron.x, apron.y, ax, ay, halfLen + 5, nx, ny, 5, 0x2b2f38);
+      const seat = at(sc.standGap + seatDepth / 2);
+      this.rect(g, seat.x, seat.y, ax, ay, halfLen, nx, ny, seatDepth / 2, 0x171b25);
+      const front = at(sc.standGap);
+      this.scatterCrowd(g, front.x, front.y, ax, ay, halfLen, nx, ny, seatDepth);
+      const roof = at(sc.standGap + seatDepth + roofDepth / 2);
+      this.rect(g, roof.x, roof.y, ax, ay, halfLen + 3, nx, ny, roofDepth / 2, 0x39414f);
+      return true;
+    };
+
+    // Primary pass: stands on the long straights (unchanged behaviour).
     for (const straight of this.layout.straights) {
       if (this.runLength(straight.indices) < sc.standMinStraightFrac * this.track.length) {
         continue;
       }
-      for (const i of this.spaced(straight.indices, sc.standSegLen, sc.standSegLen * 0.5)) {
-        const p = s[i];
-        const out = this.outwardSign(p);
-        // Don't sit a stand on the paddock side of the start/finish line…
-        if (this.pitWindow.has(i) && out === this.pitSide) continue;
-        const nx = p.nx * out;
-        const ny = p.ny * out;
-        // …or where its depth would reach onto another part of the track.
-        const e0 = this.edgeOffset(i, out, 0);
-        if (this.track.edgeRayDistance(e0.x, e0.y, nx, ny) < footprint) continue;
-
-        const ax = Math.cos(p.tangent);
-        const ay = Math.sin(p.tangent);
-        const halfLen = sc.standSegLen * (0.4 + Math.random() * 0.08);
-        const at = (d: number) => this.edgeOffset(i, out, d);
-        // Skip if any footprint corner (near apron + far roof, at both ends) would
-        // land on the track — e.g. a stand whose end pokes into the next corner.
-        const alongHalf = halfLen + 5;
-        let onTrack = false;
-        for (const depth of [sc.standGap - 5, sc.standGap + seatDepth + roofDepth]) {
-          const c = this.edgeOffset(i, out, depth);
-          for (const sgn of [1, -1]) {
-            if (this.track.onAsphalt(c.x + ax * alongHalf * sgn, c.y + ay * alongHalf * sgn)) {
-              onTrack = true;
-            }
-          }
-        }
-        if (onTrack) continue;
-
-        this.grandstandDists.push(p.dist);
-
-        // Tarmac apron + front barrier, the seating bank, then a thin back roof,
-        // all measured outward from the real track edge.
-        const apron = at(sc.standGap - 5);
-        this.rect(g, apron.x, apron.y, ax, ay, halfLen + 5, nx, ny, 5, 0x2b2f38);
-        const seat = at(sc.standGap + seatDepth / 2);
-        this.rect(g, seat.x, seat.y, ax, ay, halfLen, nx, ny, seatDepth / 2, 0x171b25);
-        const front = at(sc.standGap);
-        this.scatterCrowd(g, front.x, front.y, ax, ay, halfLen, nx, ny, seatDepth);
-        const roof = at(sc.standGap + seatDepth + roofDepth / 2);
-        this.rect(g, roof.x, roof.y, ax, ay, halfLen + 3, nx, ny, roofDepth / 2, 0x39414f);
+      // Tighter end-margin packs 1–2 extra stands onto medium straights.
+      for (const i of this.spaced(straight.indices, sc.standSegLen, sc.standSegLen * 0.3)) {
+        place(i);
       }
     }
+
+    // Guarantee a minimum count on sparse circuits (e.g. Monaco, Spa) WITHOUT
+    // touching circuits that already meet it — this only runs when we're short.
+    // Extra stands are spread AROUND THE LAP (farthest-point insertion) and biased
+    // toward straighter spots, so they fill the empty side of the circuit and don't
+    // sit awkwardly across a corner.
+    const L = this.track.length;
+    // Even ring of candidate spots around the whole lap.
+    const candStep = Math.max(1, Math.round(s.length / 160));
+    const candidates: number[] = [];
+    for (let i = 0; i < s.length; i += candStep) candidates.push(i);
+
+    // Circular arc distance from sample `i` to the nearest stand already placed.
+    const gapToNearest = (i: number): number => {
+      const d = s[i].dist;
+      let nearest = Infinity;
+      for (const gd of this.grandstandDists) {
+        const dd = Math.abs(d - gd);
+        nearest = Math.min(nearest, Math.min(dd, L - dd));
+      }
+      return nearest;
+    };
+
+    // One fill round: repeatedly take the still-free candidate that is farthest
+    // from existing stands (best spread) and straightest (low curvature), then
+    // place it. Relaxed params on later rounds guarantee we reach the minimum.
+    const fill = (minGap: number, lenFactor: number, curvWeight: number): void => {
+      const pool = candidates.slice();
+      let guard = pool.length + 5;
+      while (this.grandstandDists.length < sc.minStands && pool.length && guard-- > 0) {
+        let bestK = -1;
+        let bestScore = -Infinity;
+        for (let k = 0; k < pool.length; k++) {
+          const gap = gapToNearest(pool[k]);
+          if (gap < minGap) continue;
+          const score = gap - curvWeight * s[pool[k]].curvature;
+          if (score > bestScore) {
+            bestScore = score;
+            bestK = k;
+          }
+        }
+        if (bestK < 0) break; // nothing left far enough from existing stands
+        const i = pool[bestK];
+        pool.splice(bestK, 1); // consume this candidate either way
+        place(i, minGap, lenFactor);
+      }
+    };
+
+    if (this.grandstandDists.length < sc.minStands) fill(sc.standSegLen, 0.85, 4000);
+    // Relax spacing/size and drop the straightness bias to guarantee the count.
+    if (this.grandstandDists.length < sc.minStands) fill(sc.standSegLen * 0.6, 0.75, 1000);
+    if (this.grandstandDists.length < sc.minStands) fill(sc.standSegLen * 0.3, 0.6, 0);
     return g;
   }
 
