@@ -1,6 +1,6 @@
 import "./style.css";
 import { Application, Container } from "pixi.js";
-import { buildTrack, DEFAULT_TRACK_ID, TRACKS } from "./track/tracks";
+import { buildTrack, TRACKS, resolveTrackParam, trackParamFor } from "./track/tracks";
 import { computeLayout } from "./track/corners";
 import { TrackView } from "./render/TrackView";
 import { loadGrassBackground } from "./render/textures";
@@ -65,7 +65,8 @@ async function boot() {
   // Offline/demo runs the race endlessly so it can be shown at any hour without
   // hitting the US market close; an explicit ?demo=N still ends with a podium.
   const clock = new RaceClock(demoSeconds, !useSupabase && demoSeconds == null);
-  const trackId = params.get("track") || DEFAULT_TRACK_ID;
+  // ?track= is a numeric index into TRACKS (slug/id still accepted for old links).
+  const trackId = resolveTrackParam(params.get("track"));
   // The starting grid is shareable/persisted (?symbols= + localStorage); falls
   // back to the default top 20 when there's no saved or shared selection.
   const initialSymbols = loadGridSelection(params) ?? [...DEFAULT_SYMBOLS];
@@ -178,7 +179,7 @@ async function boot() {
     tracks: TRACKS.map((t) => ({ id: t.id, name: t.name })),
     currentTrack: trackId,
     onTrackChange: (id) => {
-      params.set("track", id);
+      params.set("track", trackParamFor(id));
       location.search = params.toString();
     },
   });

@@ -39,7 +39,7 @@ export class SkidMarks {
 
     const sprite = new Sprite(this.rt);
     sprite.position.set(this.minX, this.minY);
-    sprite.alpha = 0.125; // subtle: ~75% fainter than the old marks
+    sprite.alpha = 0.2; // subtle: ~75% fainter than the old marks
     this.container.addChild(sprite);
 
     // Two short tyre streaks centred on the origin, pointing along +x (travel

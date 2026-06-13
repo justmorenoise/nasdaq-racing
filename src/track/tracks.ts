@@ -15,6 +15,8 @@ const svgLoaders = import.meta.glob("/circuits/*.svg", {
 
 interface TrackEntry {
   circuito: string;
+  /** Stable, human-readable id used in the ?track= URL and the <select>. */
+  slug?: string;
   tempo_secondi: number;
   /** Real lap length in metres (for aligning telemetry distances). */
   lunghezza_metri?: number;
@@ -56,27 +58,15 @@ const DEFAULT_WIDTH = 54;
 // id → SVG file name, so buildTrack can lazily fetch the selected circuit only.
 const fileById: Record<string, string> = {};
 
-// Desired display order (by file slug base).
-const ORDER = [
-  "monza",
-  "monaco",
-  "catalunya",
-  "silverstone",
-  "spa-francorchamps",
-  "suzuka",
-  "interlagos",
-];
-
-// Slug → circuit base, tolerating a trailing variant letter (monza-7b → monza).
-const baseSlug = (slug: string) => slug.replace(/-\d+[a-z]?$/, "");
-
-// circuits.json is the source of truth: it lists the available circuits and,
-// via `file`, which SVG each one uses. Only metadata is built here (no SVG
-// parsing); the geometry is loaded lazily in buildTrack.
+// circuits.json is the source of truth: it lists the available circuits (in the
+// order they should appear in the menu) and, via `file`, which SVG each one uses.
+// Each circuit's `slug` is its stable id; if absent we fall back to the file name
+// minus its variant suffix (monza-7b.svg → monza). Only metadata is built here
+// (no SVG parsing); the geometry is loaded lazily in buildTrack.
 const svgTracks: TrackDef[] = lapTimes
   .filter((e) => e.file && svgLoaders[`/circuits/${e.file}`])
   .map((entry): TrackDef => {
-    const id = entry.file!.replace(/\.svg$/, "");
+    const id = entry.slug ?? entry.file!.replace(/\.svg$/, "").replace(/-\d+[a-z]?$/, "");
     const scale = entry.scale ?? 1;
     fileById[id] = entry.file!;
     return {
@@ -91,11 +81,6 @@ const svgTracks: TrackDef[] = lapTimes
       telemetry: telemetryPoints(entry.telemetria),
       lapLengthM: entry.lunghezza_metri,
     };
-  })
-  .sort((a, b) => {
-    const ia = ORDER.indexOf(baseSlug(a.id));
-    const ib = ORDER.indexOf(baseSlug(b.id));
-    return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
   });
 
 // American-style superspeedway oval (hand-made, since none of the real set is an oval).
@@ -119,11 +104,36 @@ const libertyOval: TrackDef = {
 
 export const TRACKS: TrackDef[] = [...svgTracks, libertyOval];
 
-export const DEFAULT_TRACK_ID =
-  TRACKS.find((t) => t.id.startsWith("monza"))?.id ?? TRACKS[0].id;
+// Default = the first circuit listed in circuits.json (the menu's top entry).
+export const DEFAULT_TRACK_ID = TRACKS[0].id;
 
 export function getTrackDef(id: string): TrackDef {
   return TRACKS.find((t) => t.id === id) ?? TRACKS[0];
+}
+
+/**
+ * Resolve a `?track=` URL value to a track id. The primary, versatile scheme is
+ * a **numeric index** into TRACKS (`?track=0`, `?track=1`, …), which stays valid
+ * however circuits are named; an explicit slug/id (`?track=monza`) is still
+ * accepted for hand-written or older links. Anything else falls back to the
+ * default circuit.
+ */
+export function resolveTrackParam(param: string | null): string {
+  if (param) {
+    if (/^\d+$/.test(param)) {
+      const i = Number(param);
+      if (i >= 0 && i < TRACKS.length) return TRACKS[i].id;
+    }
+    const byId = TRACKS.find((t) => t.id === param);
+    if (byId) return byId.id;
+  }
+  return DEFAULT_TRACK_ID;
+}
+
+/** The `?track=` value (index into TRACKS) to write for a given track id. */
+export function trackParamFor(id: string): string {
+  const i = TRACKS.findIndex((t) => t.id === id);
+  return String(i < 0 ? 0 : i);
 }
 
 /**
