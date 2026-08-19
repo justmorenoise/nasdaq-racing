@@ -1,5 +1,6 @@
 import type { Car } from "../sim/Car";
 import type { Battle } from "../sim/battles";
+import { t } from "../i18n";
 
 /**
  * "Race radio" — a small live feed of one-line commentary derived from the same
@@ -63,7 +64,7 @@ export class Commentary {
     // 1. New leader at the top of the standings.
     const leader = standings[0];
     if (this.prevLeader && leader.symbol !== this.prevLeader) {
-      return `🏁 ${symSpan(leader.symbol)} è la nuova vetta!`;
+      return t("radio.newLeader", { sym: symSpan(leader.symbol) });
     }
 
     // 2. A fresh battle (not announced in the last 12s).
@@ -71,7 +72,7 @@ export class Commentary {
       const last = this.seenBattles.get(b.id) ?? 0;
       this.seenBattles.set(b.id, now);
       if (now - last > 12000 && b.symbols.length >= 2) {
-        return `⚔ Lotta in pista: ${b.symbols.map(symSpan).join(" vs ")}`;
+        return t("radio.battle", { list: b.symbols.map(symSpan).join(" vs ") });
       }
     }
 
@@ -90,8 +91,12 @@ export class Commentary {
     });
     if (mover && bestGain > 0) {
       const passed = order[newRank + 1];
-      const who = passed ? ` su ${symSpan(passed.symbol)}` : "";
-      return `🔻 ${symSpan((mover as Car).symbol)} sorpassa${who} per la P${newRank + 1}!`;
+      const who = passed ? t("radio.overtakeOn", { sym: symSpan(passed.symbol) }) : "";
+      return t("radio.overtake", {
+        sym: symSpan((mover as Car).symbol),
+        on: who,
+        pos: newRank + 1,
+      });
     }
 
     // 4. A sharp % move since the last sample.
@@ -106,9 +111,10 @@ export class Commentary {
       this.pctSample.set(car.symbol, { pct: car.changePct, t: now });
       if (Math.abs(delta) >= MOVE_THRESHOLD) {
         const sign = car.changePct >= 0 ? "+" : "";
-        return delta > 0
-          ? `📈 ${symSpan(car.symbol)} vola, ora ${sign}${car.changePct.toFixed(2)}%`
-          : `📉 ${symSpan(car.symbol)} perde colpi, ora ${sign}${car.changePct.toFixed(2)}%`;
+        return t(delta > 0 ? "radio.rising" : "radio.falling", {
+          sym: symSpan(car.symbol),
+          pct: `${sign}${car.changePct.toFixed(2)}`,
+        });
       }
     }
 

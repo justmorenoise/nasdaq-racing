@@ -1,6 +1,7 @@
 import type { Car } from "../sim/Car";
 import type { ClockSample } from "../sim/RaceClock";
 import { affiliateUrl, affiliateEnabled, AFFILIATE_REL } from "../affiliate";
+import { t } from "../i18n";
 
 function hms(seconds: number): string {
   const s = Math.floor(seconds);
@@ -40,13 +41,13 @@ export class RaceHud {
 
   setStatus(s: ClockSample): void {
     if (s.state === "pre") {
-      this.status.innerHTML = `<span class="dot pre"></span> PRE-GARA · apertura mercati`;
+      this.status.innerHTML = `<span class="dot pre"></span> ${t("hud.pre")}`;
     } else if (s.state === "running") {
-      this.status.innerHTML = `<span class="dot live"></span> LIVE · ${hms(
-        s.elapsed,
-      )} / ${hms(s.total)}`;
+      this.status.innerHTML =
+        `<span class="dot live"></span> ` +
+        t("hud.live", { elapsed: hms(s.elapsed), total: hms(s.total) });
     } else {
-      this.status.innerHTML = `<span class="dot done"></span> TRAGUARDO · gara conclusa`;
+      this.status.innerHTML = `<span class="dot done"></span> ${t("hud.done")}`;
     }
   }
 
@@ -66,29 +67,29 @@ export class RaceHud {
           <span class="podium-medal">${medals[i]}</span>
           <span class="podium-chip" style="background:${color}"></span>
           <span class="podium-sym">${car.symbol}</span>
-          <span class="podium-laps">${laps} giri</span>
+          <span class="podium-laps">${t("hud.laps", { n: laps })}</span>
           <span class="podium-pct ${cls}">${sign}${car.changePct.toFixed(2)}%</span>
           ${
             affiliateEnabled
-              ? `<a class="podium-invest" href="${affiliateUrl(car.symbol)}" target="_blank" rel="${AFFILIATE_REL}">Investi su ${car.symbol} ↗</a>`
+              ? `<a class="podium-invest" href="${affiliateUrl(car.symbol)}" target="_blank" rel="${AFFILIATE_REL}">${t("hud.invest", { sym: car.symbol })}</a>`
               : ""
           }
         </div>`;
       })
       .join("");
     const disclaimer = affiliateEnabled
-      ? `<div class="podium-disclaimer">Link sponsorizzati. Le azioni/CFD comportano rischi. Non è consulenza finanziaria.</div>`
+      ? `<div class="podium-disclaimer">${t("hud.podiumDisclaimer")}</div>`
       : "";
     // Driver of the Day: the most aggressive climber (most overtakes).
     const dotdRow = dotd
       ? `<div class="podium-dotd" data-sym="${dotd.symbol}">
-          🟣 <b>Driver of the Day</b> · ${dotd.symbol}
-          <span class="podium-dotd-meta">${dotd.overtakes} sorpassi</span>
+          🟣 <b>${t("hud.dotd")}</b> · ${dotd.symbol}
+          <span class="podium-dotd-meta">${t("hud.overtakes", { n: dotd.overtakes })}</span>
         </div>`
       : "";
     this.podium.innerHTML = `
       <div class="podium-card">
-        <div class="podium-title">🏁 RISULTATO DI GIORNATA</div>
+        <div class="podium-title">${t("hud.resultTitle")}</div>
         ${rows}
         ${dotdRow}
         ${disclaimer}

@@ -1,4 +1,5 @@
 import { NASDAQ_TOP } from "../data/nasdaq100";
+import { t } from "../i18n";
 
 /**
  * Toggle panel for choosing which stocks race. Defaults to all (top 20).
@@ -17,7 +18,7 @@ export class StockSelector {
 
     const title = document.createElement("div");
     title.className = "panel-title";
-    title.textContent = "TITOLI IN GARA";
+    title.textContent = t("selector.title");
     this.el.appendChild(title);
 
     const grid = document.createElement("div");

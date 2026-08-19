@@ -1,4 +1,5 @@
 import { signupUrl, affiliateEnabled, AFFILIATE_REL } from "../affiliate";
+import { t } from "../i18n";
 
 /** Build a button with a separate icon and label span. The label is hidden on
  * mobile (CSS), collapsing the bar to a single row of icons; the icon's `title`
@@ -47,10 +48,10 @@ export class Controls {
   }) {
     this.el.className = "controls";
 
-    const full = iconButton("◳", "Vista completa");
+    const full = iconButton("◳", t("controls.fullView"));
     full.btn.addEventListener("click", opts.onFullView);
 
-    const director = iconButton("🎬", "Regia auto");
+    const director = iconButton("🎬", t("controls.directorOff"));
     this.director = director.btn;
     this.setDirectorLabel = director.setLabel;
     director.btn.addEventListener("click", () => {
@@ -60,7 +61,7 @@ export class Controls {
 
     const trackSel = document.createElement("select");
     trackSel.className = "btn select";
-    trackSel.title = "Circuito";
+    trackSel.title = t("controls.track");
     for (const t of opts.tracks) {
       const o = document.createElement("option");
       o.value = t.id;
@@ -70,7 +71,7 @@ export class Controls {
     }
     trackSel.addEventListener("change", () => opts.onTrackChange(trackSel.value));
 
-    const labelText = () => (opts.labelsOn ? "Etichette ON" : "Etichette");
+    const labelText = () => t(opts.labelsOn ? "controls.labelsOn" : "controls.labelsOff");
     const labels = iconButton("🏷", labelText());
     labels.btn.classList.toggle("active", opts.labelsOn);
     labels.btn.addEventListener("click", () => {
@@ -80,18 +81,18 @@ export class Controls {
       opts.onToggleLabels(opts.labelsOn);
     });
 
-    const sound = iconButton("🔇", "Audio");
+    const sound = iconButton("🔇", t("controls.soundOff"));
     sound.btn.addEventListener("click", () => {
       const on = opts.onToggleSound();
       sound.btn.classList.toggle("active", on);
-      sound.setLabel(on ? "Audio ON" : "Audio");
+      sound.setLabel(t(on ? "controls.soundOn" : "controls.soundOff"));
       sound.btn.querySelector(".btn-icon")!.textContent = on ? "🔊" : "🔇";
     });
 
-    const sel = iconButton("☰", "Titoli");
+    const sel = iconButton("☰", t("controls.stocks"));
     sel.btn.addEventListener("click", opts.onToggleSelector);
 
-    this.el.append(full.btn, director.btn, trackSel, labels.btn, sound.btn, sel.btn);
+    this.el.append(full.btn, director.btn, labels.btn, sound.btn, trackSel, sel.btn);
 
     if (affiliateEnabled) {
       const invest = document.createElement("a");
@@ -101,9 +102,9 @@ export class Controls {
       ico.textContent = "💸";
       const lbl = document.createElement("span");
       lbl.className = "btn-label";
-      lbl.textContent = "Apri conto";
+      lbl.textContent = t("controls.openAccount");
       invest.append(ico, lbl);
-      invest.title = "Apri conto";
+      invest.title = t("controls.openAccount");
       invest.href = signupUrl();
       invest.target = "_blank";
       invest.rel = AFFILIATE_REL;
@@ -115,6 +116,6 @@ export class Controls {
    * manual control by picking a car, the director turns off). */
   setDirector(on: boolean): void {
     this.director.classList.toggle("active", on);
-    this.setDirectorLabel(on ? "Regia ON" : "Regia auto");
+    this.setDirectorLabel(t(on ? "controls.directorOn" : "controls.directorOff"));
   }
 }

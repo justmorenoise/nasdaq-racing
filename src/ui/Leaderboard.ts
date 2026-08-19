@@ -1,5 +1,6 @@
 import type { Car } from "../sim/Car";
 import { affiliateUrl, affiliateEnabled, AFFILIATE_REL } from "../affiliate";
+import { t } from "../i18n";
 
 interface Row {
   el: HTMLElement;
@@ -41,11 +42,11 @@ export class Leaderboard {
     this.list.className = "list";
     const title = document.createElement("button");
     title.className = "panel-title lb-toggle";
-    title.title = "Comprimi/espandi la classifica";
+    title.title = t("leaderboard.toggle");
     const caret = document.createElement("span");
     caret.className = "lb-caret";
     const label = document.createElement("span");
-    label.textContent = "CLASSIFICA";
+    label.textContent = t("leaderboard.title");
     title.append(label, caret);
     title.addEventListener("click", () =>
       this.el.classList.toggle("collapsed"),
@@ -88,7 +89,7 @@ export class Leaderboard {
       invest.href = affiliateUrl(car.symbol);
       invest.target = "_blank";
       invest.rel = AFFILIATE_REL;
-      invest.title = `Investi su ${car.symbol}`;
+      invest.title = t("leaderboard.invest", { sym: car.symbol });
       // Keep the affiliate click separate from the row's chase action.
       invest.addEventListener("click", (e) => e.stopPropagation());
       el.append(invest);

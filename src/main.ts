@@ -18,6 +18,7 @@ import { DEFAULT_SYMBOLS } from "./data/nasdaq100";
 import { loadGridSelection, saveGridSelection } from "./data/gridState";
 import { Leaderboard } from "./ui/Leaderboard";
 import { Controls } from "./ui/Controls";
+import { resolveLang, t } from "./i18n";
 import { StockSelector } from "./ui/StockSelector";
 import { Commentary } from "./ui/Commentary";
 import { detectBattles } from "./sim/battles";
@@ -49,6 +50,8 @@ async function boot() {
   stageWrap.appendChild(app.canvas);
 
   const params = new URLSearchParams(location.search);
+  // La lingua dell'interfaccia: `?lang=` la passa l'iframe di morenoise.it.
+  resolveLang(params);
   // Dev-only time acceleration: ?speed=10 makes a lap take 1/10th the time.
   const timeScale = Math.max(1, Number(params.get("speed")) || 1);
   // ?demo=N runs a compressed N-second session that ends with a podium.
@@ -205,8 +208,7 @@ async function boot() {
   if (affiliateEnabled) {
     const disclaimer = document.createElement("div");
     disclaimer.className = "disclaimer";
-    disclaimer.textContent =
-      "I link a eToro sono sponsorizzati. Le azioni/CFD comportano rischi di perdita del capitale. Non è consulenza finanziaria.";
+    disclaimer.textContent = t("disclaimer.affiliate");
     overlay.append(disclaimer);
   }
 
@@ -405,12 +407,12 @@ async function boot() {
           pos > 0 ? `+${gapSeconds(leader.progress - car.progress).toFixed(1)}s` : "—";
         const toAhead = ahead
           ? `+${gapSeconds(ahead.progress - car.progress).toFixed(1)}s ${ahead.symbol}`
-          : "in testa";
+          : t("hud.leading");
         const investLink = affiliateEnabled
-          ? ` · <a class="chase-invest" href="${affiliateUrl(car.symbol)}" target="_blank" rel="${AFFILIATE_REL}">Investi ↗</a>`
+          ? ` · <a class="chase-invest" href="${affiliateUrl(car.symbol)}" target="_blank" rel="${AFFILIATE_REL}">${t("hud.investShort")}</a>`
           : "";
         raceHud.setChaseInfo(
-          `<b>P${pos + 1}</b> ${car.symbol} · dal leader <b>${toLeader}</b> · ${toAhead}` +
+          `<b>P${pos + 1}</b> ${car.symbol} · ${t("hud.fromLeader")} <b>${toLeader}</b> · ${toAhead}` +
             investLink,
         );
       } else {
