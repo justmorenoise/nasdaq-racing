@@ -67,7 +67,13 @@ async function boot() {
 
   // Offline/demo runs the race endlessly so it can be shown at any hour without
   // hitting the US market close; an explicit ?demo=N still ends with a podium.
-  const clock = new RaceClock(demoSeconds, !useSupabase && demoSeconds == null);
+  // Dev-only: ?at=<ISO date> pretends "now" is that instant (e.g. after the close).
+  const atMs = params.has("at") ? Date.parse(params.get("at")!) : NaN;
+  const clock = new RaceClock(
+    demoSeconds,
+    !useSupabase && demoSeconds == null,
+    Number.isFinite(atMs) ? atMs - Date.now() : 0,
+  );
   // ?track= is a numeric index into TRACKS (slug/id still accepted for old links).
   const trackId = resolveTrackParam(params.get("track"));
   // The starting grid is shareable/persisted (?symbols= + localStorage); falls
@@ -295,6 +301,7 @@ async function boot() {
   const gapSeconds = (distAhead: number) =>
     (distAhead * track.def.baseLapTime) / track.length;
 
+  let settled = false;
   let uiAccum = 0;
   let directorAccum = 0;
   const frame = (dt: number) => {
@@ -303,7 +310,12 @@ async function boot() {
       model.update(dt * timeScale);
       skid.update(model.cars.values(), (c) => model.poseForCar(c));
       sparks.emit(model.contacts, (c) => model.poseForCar(c), dt);
-    } else if (clk.state === "finished") {
+    } else if (clk.state === "finished" && model.hasData) {
+      // Wait for real prices: the feed snapshot lands a few frames after boot.
+      if (!settled) {
+        settled = true;
+        model.settleFinal(clk.total);
+      }
       raceHud.showPodium(model.order, model.driverOfTheDay());
     }
     // Always advance sparks so any in-flight particles finish their arc.

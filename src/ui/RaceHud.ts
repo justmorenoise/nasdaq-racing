@@ -21,6 +21,8 @@ export class RaceHud {
   readonly podium = document.createElement("div");
   readonly chaseInfo = document.createElement("div");
   private trackLength: number;
+  /** Symbols + % of the podium currently shown, to redraw only on change. */
+  private podiumKey = "";
 
   constructor(trackLength: number, private onSelect: (symbol: string) => void) {
     this.trackLength = trackLength;
@@ -52,10 +54,15 @@ export class RaceHud {
   }
 
   showPodium(order: Car[], dotd?: Car | null): void {
-    if (!this.podium.classList.contains("hidden")) return;
     // The day's result is the final standings: rank by daily % change (best
     // first), not by the on-track running order.
     const top = [...order].sort((a, b) => b.changePct - a.changePct).slice(0, 3);
+    // Redraw when a late snapshot/realtime update changes the result.
+    const key =
+      top.map((c) => `${c.symbol}:${c.changePct.toFixed(2)}`).join("|") +
+      `|${dotd?.symbol ?? ""}`;
+    if (key === this.podiumKey) return;
+    this.podiumKey = key;
     const medals = ["🥇", "🥈", "🥉"];
     const rows = top
       .map((car, i) => {
@@ -108,5 +115,6 @@ export class RaceHud {
 
   hidePodium(): void {
     this.podium.classList.add("hidden");
+    this.podiumKey = "";
   }
 }

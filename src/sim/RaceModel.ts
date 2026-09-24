@@ -87,6 +87,28 @@ export class RaceModel {
     }
   }
 
+  /** True once at least one real price has arrived from the feed. */
+  get hasData(): boolean {
+    for (const c of this.cars.values()) if (Math.abs(c.changePct) > 1e-6) return true;
+    return false;
+  }
+
+  /**
+   * Final classification for a session that ended before this page raced it
+   * (opened after the close): park the field in standings order and credit each
+   * car the laps of a full session, minus its standings gap to the leader.
+   */
+  settleFinal(sessionSeconds: number): void {
+    this.update(0);
+    const L = this.track.length;
+    const leaderDist = (sessionSeconds / this.track.def.baseLapTime) * L;
+    const anchor = Math.max(...[...this.cars.values()].map((c) => c.targetProgress));
+    for (const car of this.cars.values()) {
+      if (car.distance > 0) continue;
+      car.distance = Math.max(0, leaderDist - (anchor - car.targetProgress));
+    }
+  }
+
   private clampPct(p: number): number {
     return Math.max(
       -CONFIG.changePctClamp,
@@ -107,7 +129,7 @@ export class RaceModel {
     );
     // Don't lock initial placement until real data has arrived, so cars start
     // already in standings order (avoids an arbitrary 0%-ordered grid sorting out).
-    const hasData = standings.some((c) => Math.abs(c.changePct) > 1e-6);
+    const hasData = this.hasData;
     // Accrue "laps led" for the standings leader (P1), once real data is in.
     if (hasData && standings.length) standings[0].timeInP1 += dt;
     const anchor = standings.reduce((m, c) => Math.max(m, c.progress), -Infinity);

@@ -27,12 +27,14 @@ export class RaceClock {
   constructor(
     private demoSeconds: number | null = null,
     private endless: boolean = false,
+    /** Dev override: shifts wall-clock time (see `?at=` in main.ts). */
+    private offsetMs = 0,
     nowMs: number = Date.now(),
   ) {
-    this.startMs = nowMs;
+    this.startMs = nowMs + offsetMs;
   }
 
-  sample(nowMs: number = Date.now()): ClockSample {
+  sample(nowMs: number = Date.now() + this.offsetMs): ClockSample {
     if (this.endless) return this.sampleEndless(nowMs);
     return this.demoSeconds != null
       ? this.sampleDemo(nowMs)
