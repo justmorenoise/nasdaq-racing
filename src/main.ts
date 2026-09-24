@@ -348,7 +348,7 @@ async function boot() {
     const focusSym = camera.followedSymbol ?? leaderSym;
     const focusCar =
       clk.state === "running" && focusSym ? model.cars.get(focusSym) ?? null : null;
-    audio.update(focusCar, track, scenery.grandstandDists);
+    audio.update(focusCar, track, scenery.grandstandDists, model.cars.values());
 
     if (CONFIG.debug.showGear) {
       if (focusCar) {
@@ -445,6 +445,7 @@ async function boot() {
     track,
     scenery,
     stage,
+    audio,
     frame,
     render: () => stage.render(),
   };

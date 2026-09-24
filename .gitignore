@@ -5,3 +5,5 @@ dist
 .DS_Store
 .vite
 *.blend1
+_risorse/audio_src/*.ogg
+_risorse/audio_src/*.wav

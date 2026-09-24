@@ -1,0 +1,12 @@
+{
+ "mid": {
+  "file": "engine_mid.wav",
+  "pitch": 452.5,
+  "seconds": 0.351
+ },
+ "high": {
+  "file": "engine_high.wav",
+  "pitch": 522.7,
+  "seconds": 0.501
+ }
+}
