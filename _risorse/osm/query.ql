@@ -1,0 +1,22 @@
+[out:json][timeout:120];
+(
+  way(around:{R},{LAT},{LON})[highway];
+  way(around:{R},{LAT},{LON})[building];
+  way(around:{R},{LAT},{LON})[landuse];
+  way(around:{R},{LAT},{LON})[natural];
+  way(around:{R},{LAT},{LON})[leisure];
+  way(around:{R},{LAT},{LON})[barrier];
+  way(around:{R},{LAT},{LON})[amenity=parking];
+  way(around:{R},{LAT},{LON})[surface];
+  way(around:{R},{LAT},{LON})["area:highway"];
+  way(around:{R},{LAT},{LON})[man_made];
+  way(around:{R},{LAT},{LON})[waterway];
+  way(around:{R},{LAT},{LON})[railway];
+  relation(around:{R},{LAT},{LON})[building];
+  relation(around:{R},{LAT},{LON})[landuse];
+  relation(around:{R},{LAT},{LON})[natural];
+  node(around:{R},{LAT},{LON})[natural=tree];
+  node(around:{R},{LAT},{LON})[highway=crossing];
+  node(around:{R},{LAT},{LON})[highway=street_lamp];
+);
+out geom;

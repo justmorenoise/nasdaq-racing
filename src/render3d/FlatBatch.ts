@@ -94,6 +94,24 @@ export class FlatBatch {
     }
   }
 
+  /** A ribbon whose every vertex sits on the ground (`ground(x, y)` + lift). */
+  drapedStrip(key: string, line: { x: number; y: number }[], width: number, ground: (x: number, y: number) => number, lift: number, color = 0xffffff): void {
+    const hw = width / 2;
+    const side = (i: number, sgn: number) => {
+      const q = line[Math.min(i + 1, line.length - 1)];
+      const o = line[Math.max(i - 1, 0)];
+      const dx = q.x - o.x;
+      const dy = q.y - o.y;
+      const L = Math.hypot(dx, dy) || 1;
+      const x = line[i].x - (dy / L) * hw * sgn;
+      const y = line[i].y + (dx / L) * hw * sgn;
+      return { x, y, h: ground(x, y) + lift };
+    };
+    for (let k = 1; k < line.length; k++) {
+      this.quad(key, side(k - 1, 1), side(k, 1), side(k, -1), side(k - 1, -1), color);
+    }
+  }
+
   build(materials: Record<string, BatchMaterial>): Group {
     const g = new Group();
     for (const [key, b] of this.buckets) {

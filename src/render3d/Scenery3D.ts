@@ -13,6 +13,7 @@ import type { Pt } from "../track/centerline";
 import type { TrackLayout } from "../track/corners";
 import { KitInstancer, PROP_SCALE } from "./Kit";
 import type { Occupancy } from "./Occupancy";
+import type { OsmWorld } from "./osm";
 import { outwardSign, pitInfo } from "./pitInfo";
 import { Solids } from "./Solids";
 import type { Terrain } from "./Terrain";
@@ -50,6 +51,7 @@ export class Scenery3D {
     private layout: TrackLayout,
     private terrain: Terrain,
     private occ: Occupancy,
+    private osm: OsmWorld | null = null,
   ) {
     this.rand = mulberry32(hashString(track.def.id + ":scenery"));
     this.pit = pitInfo(track);
@@ -129,9 +131,9 @@ export class Scenery3D {
     const s = this.track.samples;
     const depth = sc.standDepth * 0.9;
 
-    const place = (i: number, minGap = 0, lenFactor = 1): boolean => {
+    const place = (i: number, minGap = 0, lenFactor = 1, side?: number, gapOverride?: number, lenOverride?: number): boolean => {
       const p = s[i];
-      const out = outwardSign(this.track, p);
+      const out = side ?? outwardSign(this.track, p);
       if (this.pit.window.has(i) && out === this.pit.side) return false;
       if (this.track.nearSelf[i]) return false;
       if (minGap > 0) {
@@ -142,25 +144,48 @@ export class Scenery3D {
       }
       const ax = Math.cos(p.tangent);
       const ay = Math.sin(p.tangent);
-      const halfLen = sc.standSegLen * (0.42 + this.rand() * 0.1) * lenFactor;
-      const mid = this.edgeOffset(i, out, sc.standGap + depth / 2);
+      const halfLen = lenOverride ?? sc.standSegLen * (0.42 + this.rand() * 0.1) * lenFactor;
+      const gap = gapOverride ?? (this.track.def.street ? sc.standGap * 0.45 : sc.standGap);
+      const mid = this.edgeOffset(i, out, gap + depth / 2);
       const r = depth / 2;
       // The footprint as a row of circles along the stand (it's long and thin).
       const dots: Pt[] = [];
       for (let u = -halfLen; u <= halfLen + 0.1; u += r) dots.push({ x: mid.x + ax * u, y: mid.y + ay * u });
       if (dots.some((d) => !this.occ.free(d.x, d.y, r * 0.95))) return false;
-      if (dots.some((d) => this.terrain.trackDistance(d.x, d.y) < this.half + sc.standGap)) return false;
+      if (dots.some((d) => this.terrain.trackDistance(d.x, d.y) < this.half + gap)) return false;
       if (this.track.edgeRayDistance(mid.x, mid.y, p.nx * out, p.ny * out) < depth) return false;
       for (const d of dots) this.occ.add(d.x, d.y, r);
       this.grandstandDists.push(p.dist);
-      this.buildStand((d) => this.edgeOffset(i, out, d), ax, ay, halfLen, depth, p.h);
+      this.buildStand((d) => this.edgeOffset(i, out, d - sc.standGap + gap), ax, ay, halfLen, depth, p.h);
       return true;
     };
 
-    for (const straight of this.layout.straights) {
-      if (this.runLength(straight.indices) < sc.standMinStraightFrac * this.track.length) continue;
-      for (const i of this.spaced(straight.indices, sc.standSegLen * 1.05, sc.standSegLen * 0.3)) place(i);
+    // Real stands first (OSM): each at the lap position and side it overlooks.
+    const real = this.osm ? this.osm.raw.stands.map((b) => this.osm!.mapBox(b)).filter((b) => b !== null) : [];
+    for (const b of real) {
+      let bi = -1;
+      let bd = Infinity;
+      for (let i = 0; i < s.length - 1; i++) {
+        const d = (s[i].x - b.x) ** 2 + (s[i].y - b.y) ** 2;
+        if (d < bd) {
+          bd = d;
+          bi = i;
+        }
+      }
+      const dist = Math.sqrt(bd);
+      if (bi < 0 || dist > 500) continue;
+      const side = (b.x - s[bi].x) * s[bi].nx + (b.y - s[bi].y) * s[bi].ny >= 0 ? 1 : -1;
+      const gap = Math.max(sc.standGap * 0.45, dist - this.half - depth / 2);
+      const halfLen = Math.min(110, Math.max(40, (b.w * this.osm!.scale * 1.4) / 2));
+      place(bi, sc.standSegLen * 0.4, 1, side, gap, halfLen);
     }
+    if (real.length < 3) {
+      for (const straight of this.layout.straights) {
+        if (this.runLength(straight.indices) < sc.standMinStraightFrac * this.track.length) continue;
+        for (const i of this.spaced(straight.indices, sc.standSegLen * 1.05, sc.standSegLen * 0.3)) place(i);
+      }
+    }
+    if (real.length >= 3) return;
     // Corner-exit stands overlooking the braking zones (like the refs' hairpin stands).
     for (const run of this.layout.runs) {
       const i = run.indices[Math.min(run.indices.length - 1, run.apexEnd + 2)];

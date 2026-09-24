@@ -7,3 +7,4 @@ dist
 *.blend1
 _risorse/audio_src/*.ogg
 _risorse/audio_src/*.wav
+_risorse/osm/raw/

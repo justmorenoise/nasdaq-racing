@@ -9,6 +9,8 @@ import {
   LineBasicMaterial,
   LineSegments,
   MeshLambertMaterial,
+  ShapeUtils,
+  Vector2,
 } from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { CONFIG } from "../config";
@@ -19,6 +21,7 @@ import { FlatBatch, type Pt3 } from "./FlatBatch";
 import { pitInfo } from "./pitInfo";
 import { Solids } from "./Solids";
 import type { Terrain } from "./Terrain";
+import type { OsmWorld } from "./osm";
 import { asphaltTexture, gravelTexture } from "./textures";
 
 /** Heights above the local track surface for each stacked layer. */
@@ -82,6 +85,8 @@ export class TrackMesh {
   private n: number;
   private hw: [number[], number[]]; // [left, right] smoothed half-widths
   private racing: number[];
+  /** Smoothed signed curvature per sample (for inside-of-bend offset limits). */
+  private kSm: number[];
   private kerbAt: [Uint8Array, Uint8Array];
   private pit: { window: Set<number>; side: number };
   private fence: number[] = [];
@@ -90,10 +95,12 @@ export class TrackMesh {
     private track: Track,
     private layout: TrackLayout,
     private terrain: Terrain,
+    private osm: OsmWorld | null = null,
   ) {
     this.n = track.samples.length - 1;
     this.hw = this.halfWidths();
     this.racing = this.racingLine();
+    this.kSm = smoothCircular(track.samples.slice(0, this.n).map((p) => p.signedCurvature), 3, 3);
     this.kerbAt = [new Uint8Array(this.n), new Uint8Array(this.n)];
     this.pit = pitInfo(track);
 
@@ -102,6 +109,7 @@ export class TrackMesh {
     this.kerbs();
     this.verges();
     this.runOff();
+    if (this.osmGravel) this.realGravel();
     this.startFinish();
     this.barriers();
     this.bridges();
@@ -117,6 +125,28 @@ export class TrackMesh {
     this.group.add(this.solids.build());
     this.group.add(this.tireWalls());
     if (this.fence.length) this.group.add(this.fenceMesh());
+  }
+
+  /** Enough real gravel traps mapped to use them instead of guessing. */
+  private get osmGravel(): boolean {
+    return !this.track.def.street && (this.osm?.raw.gravel.length ?? 0) >= 8;
+  }
+
+  /** OSM gravel traps near the track, draped on the ground beside it. */
+  private realGravel(): void {
+    const reach = this.track.def.width / 2 + 260;
+    for (const poly of this.osm!.raw.gravel) {
+      const pts = this.osm!.mapLine(poly, 3);
+      if (pts.length < 3) continue;
+      if (!pts.some((p) => this.terrain.trackDistance(p.x, p.y) < reach)) continue;
+      const tris = ShapeUtils.triangulateShape(pts.map((p) => new Vector2(p.x, p.y)), []);
+      const P = (i: number): Pt3 => ({ x: pts[i].x, y: pts[i].y, h: this.terrain.heightAt(pts[i].x, pts[i].y) + 1.0 });
+      for (const [a, b, c] of tris) this.batch.tri("runoffGravel", P(a), P(b), P(c));
+    }
+  }
+
+  private get street(): boolean {
+    return !!this.track.def.street;
   }
 
   private side(sgn: number): 0 | 1 {
@@ -154,9 +184,21 @@ export class TrackMesh {
 
   /** A point `d` outward from the edge on `sgn` (+1 = +normal) at sample `i`, lifted. */
   private edge(i: number, sgn: number, d: number, lift: number): Pt3 {
-    const s = this.track.samples[i % this.n];
-    const w = this.hw[this.side(sgn)][i % this.n] + d;
+    const k = i % this.n;
+    const s = this.track.samples[k];
+    const hw = this.hw[this.side(sgn)][k];
+    let w = hw + d;
+    // On the inside of a bend an offset beyond the turning radius folds the
+    // strip back over itself (tangled kerbs in hairpins/chicanes): cap it.
+    if (d > 0 && sgn * this.kSm[k] > 0) w = Math.min(w, Math.max(hw, 0.82 / Math.abs(this.kSm[k])));
     return { x: s.x + s.nx * sgn * w, y: s.y + s.ny * sgn * w, h: s.h + lift };
+  }
+
+  /** Like `edge`, but resting on the ground once it leaves the road's shoulder. */
+  private edgeOnGround(i: number, sgn: number, d: number, lift: number): Pt3 {
+    const p = this.edge(i, sgn, d, lift);
+    if (d > 6) p.h = this.terrain.heightAt(p.x, p.y) + 0.9 + lift;
+    return p;
   }
 
   /** A point at lateral fraction u ∈ [-1, 1] across the asphalt. */
@@ -226,14 +268,28 @@ export class TrackMesh {
     const ks = this.track.def.kerbScale ?? 1;
     const w = CONFIG.scenery.kerbWidth * ks * 1.2;
     const cell = CONFIG.scenery.kerbCellLen * ks;
+    // Inside kerbs first (they matter most), then exit kerbs only where that
+    // side has none yet — in a chicane the exit of one bend is the inside of the next.
     for (const run of this.layout.runs) {
       for (const seg of this.splitAtCrossings(run.indices)) this.kerbCells(seg, run.turnSign, w, cell);
-      for (const seg of this.splitAtCrossings(run.indices.slice(run.apexEnd))) this.kerbCells(seg, -run.turnSign, w, cell);
+    }
+    for (const run of this.layout.runs) {
+      const side = this.side(-run.turnSign);
+      const free = run.indices.slice(run.apexEnd).filter((i) => !this.kerbAt[side][i]);
+      for (const seg of this.splitAtCrossings(free)) this.kerbCells(seg, -run.turnSign, w, cell);
     }
   }
 
   /** Alternating red/white cells re-sampled at a fixed length along the kerb, raised at the outer lip. */
   private kerbCells(indices: number[], sgn: number, w: number, cell: number): void {
+    // Split where indices jump (filtered runs), each piece drawn on its own.
+    for (let k = 1; k < indices.length; k++) {
+      if ((indices[k] - indices[k - 1] + this.n) % this.n !== 1) {
+        this.kerbCells(indices.slice(0, k), sgn, w, cell);
+        this.kerbCells(indices.slice(k), sgn, w, cell);
+        return;
+      }
+    }
     if (indices.length < 2) return;
     for (const i of indices) this.kerbAt[this.side(sgn)][i] = 1;
     const inner = indices.map((i) => this.edge(i, sgn, -w * 0.25, LIFT.kerbIn));
@@ -256,7 +312,12 @@ export class TrackMesh {
     while (pos < total - 1e-3) {
       const p = at(pos);
       const q = at(Math.min(pos + cell, total));
-      this.batch.quad("paint", p.a, q.a, q.b, p.b, idx % 2 === 0 ? KERB_RED : KERB_WHITE);
+      // Skip a cell whose outer lip runs backwards (still folded after the cap).
+      const inX = q.a.x - p.a.x;
+      const inY = q.a.y - p.a.y;
+      const outX = q.b.x - p.b.x;
+      const outY = q.b.y - p.b.y;
+      if (inX * outX + inY * outY > 0) this.batch.quad("paint", p.a, q.a, q.b, p.b, idx % 2 === 0 ? KERB_RED : KERB_WHITE);
       pos += cell;
       idx++;
     }
@@ -274,13 +335,20 @@ export class TrackMesh {
         if (sgn === this.pit.side && (this.pit.window.has(i) || this.pit.window.has(j))) continue;
         const k0 = this.kerbAt[side][i] ? kw : 0;
         const k1 = this.kerbAt[side][j] ? kw : 0;
+        if (this.street) {
+          // Street circuit: a raised pavement behind the barrier line.
+          const s0 = k0 + 4;
+          const s1 = k1 + 4;
+          this.batch.quad("paint", this.edge(i, sgn, s0, 1.4), this.edge(i + 1, sgn, s1, 1.4), this.edge(i + 1, sgn, s1 + 14, 1.4), this.edge(i, sgn, s0 + 14, 1.4), 0xc9c4b8);
+          continue;
+        }
         const col = this.kerbAt[side][i] ? VERGE_CORNER : VERGE_STRAIGHT;
         this.batch.quad(
           "paint",
           this.edge(i, sgn, k0, LIFT.verge),
           this.edge(i + 1, sgn, k1, LIFT.verge),
-          this.edge(i + 1, sgn, k1 + 9, LIFT.vergeOut),
-          this.edge(i, sgn, k0 + 9, LIFT.vergeOut),
+          this.edgeOnGround(i + 1, sgn, k1 + 9, LIFT.vergeOut),
+          this.edgeOnGround(i, sgn, k0 + 9, LIFT.vergeOut),
           col,
         );
       }
@@ -292,11 +360,14 @@ export class TrackMesh {
     const w = CONFIG.scenery.runOffWidth;
     const bySeverity = [...this.layout.runs].sort((a, b) => b.peakSeverity - a.peakSeverity);
     const gravel = new Set(bySeverity.slice(0, Math.ceil(bySeverity.length * 0.6)));
-    for (const run of this.layout.runs) {
+    // A street circuit has escape roads only at a few big stops, all tarmac.
+    const runs = this.street ? bySeverity.slice(0, 3) : this.layout.runs;
+    for (const run of runs) {
       const sgn = -run.turnSign;
       const m = run.indices.length;
-      const key = gravel.has(run) ? "runoffGravel" : "runoffTarmac";
-      const start = 12;
+      const key = gravel.has(run) && !this.street && !this.osmGravel ? "runoffGravel" : "runoffTarmac";
+      const start = this.street ? 4 : 12;
+      const width = this.street ? w * 0.5 : this.osmGravel ? w * 0.55 : w;
       for (let k = 1; k < m; k++) {
         const i0 = run.indices[k - 1];
         const i1 = run.indices[k];
@@ -304,12 +375,22 @@ export class TrackMesh {
         const t0 = Math.sin((Math.PI * (k - 1)) / (m - 1 || 1));
         const t1 = Math.sin((Math.PI * k) / (m - 1 || 1));
         if (t0 < 0.05 && t1 < 0.05) continue;
+        // Never spill onto another stretch of track: shrink until clear.
+        const reach = (i: number, t: number) => {
+          let r = width * t;
+          const own = this.hw[this.side(sgn)][i] + start;
+          while (r > 2 && this.foreign(this.edge(i, sgn, start + r, 0), own + r)) r *= 0.7;
+          return r > 2 ? r : 0;
+        };
+        const r0 = reach(i0, t0);
+        const r1 = reach(i1, t1);
+        if (r0 === 0 && r1 === 0) continue;
         this.batch.quad(
           key,
           this.edge(i0, sgn, start, LIFT.runoffIn),
           this.edge(i1, sgn, start, LIFT.runoffIn),
-          this.edge(i1, sgn, start + w * t1, LIFT.runoffIn + (LIFT.runoffOut - LIFT.runoffIn) * t1),
-          this.edge(i0, sgn, start + w * t0, LIFT.runoffIn + (LIFT.runoffOut - LIFT.runoffIn) * t0),
+          this.edgeOnGround(i1, sgn, start + r1, LIFT.runoffOut + 0.4),
+          this.edgeOnGround(i0, sgn, start + r0, LIFT.runoffOut + 0.4),
         );
       }
     }
@@ -366,6 +447,10 @@ export class TrackMesh {
    * and wherever another part of the track is closer.
    */
   private barriers(): void {
+    if (this.street) {
+      this.streetBarriers();
+      return;
+    }
     const g = this.solids;
     const off = 14;
     for (const straight of this.layout.straights) {
@@ -382,12 +467,63 @@ export class TrackMesh {
           const own = this.hw[this.side(sgn)][i0] + off;
           if (this.foreign(a, own) || this.foreign(b, own)) continue;
           if (k % 7 === 0) color = SPONSOR[Math.floor(k / 7 + i0) % SPONSOR.length];
-          g.wall(a, b, a.h, b.h, 1.8, -3, 5, 0xc9c6be, 0xd8d5ce);
+          // Base down to whatever the ground does beside the road.
+          const ga = Math.min(a.h, this.terrain.heightAt(a.x, a.y)) - 1.5;
+          const gb = Math.min(b.h, this.terrain.heightAt(b.x, b.y)) - 1.5;
+          g.prism(
+            this.wallFoot(a, b, 1.8),
+            [ga, gb, gb, ga],
+            [a.h + 5, b.h + 5, b.h + 5, a.h + 5],
+            0xc9c6be,
+            0xd8d5ce,
+          );
           const fa = this.edge(i0, sgn, off - 1, 0);
           const fb = this.edge(i1, sgn, off - 1, 0);
           g.wall(fa, fb, fa.h, fb.h, 0.25, 0.8, 4.4, color);
           this.fence.push(a.x, a.h + 5, a.y, b.x, b.h + 5, b.y);
         }
+      }
+    }
+  }
+
+  /** Footprint of a wall of `thick` along a→b. */
+  private wallFoot(a: Pt, b: Pt, thick: number): Pt[] {
+    const len = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+    const nx = (-(b.y - a.y) / len) * (thick / 2);
+    const ny = ((b.x - a.x) / len) * (thick / 2);
+    return [
+      { x: a.x + nx, y: a.y + ny },
+      { x: b.x + nx, y: b.y + ny },
+      { x: b.x - nx, y: b.y - ny },
+      { x: a.x - nx, y: a.y - ny },
+    ];
+  }
+
+  /**
+   * Street circuit: Armco guard rail right behind the kerb line on both sides
+   * of the whole lap (posts + two steel rails), catch fences along the
+   * straights, gaps only at the pit lane and where another stretch is closer.
+   */
+  private streetBarriers(): void {
+    const g = this.solids;
+    const ks = this.track.def.kerbScale ?? 1;
+    const kw = CONFIG.scenery.kerbWidth * ks * 1.2 * 0.75;
+    const straight = new Set(this.layout.straights.flatMap((st) => st.indices));
+    for (const sgn of [1, -1]) {
+      const side = this.side(sgn);
+      for (let i = 0; i < this.n; i++) {
+        const j = (i + 1) % this.n;
+        if (this.track.nearSelf[i] || this.track.nearSelf[j]) continue;
+        if (sgn === this.pit.side && (this.pit.window.has(i) || this.pit.window.has(j))) continue;
+        const off0 = (this.kerbAt[side][i] ? kw : 0) + 2.5;
+        const off1 = (this.kerbAt[side][j] ? kw : 0) + 2.5;
+        const a = this.edge(i, sgn, off0, 0);
+        const b = this.edge(i + 1, sgn, off1, 0);
+        const own = this.hw[side][i] + off0;
+        if (this.foreign(a, own) || this.foreign(b, own)) continue;
+        for (const [lo, hi] of [[2.2, 3.2], [3.8, 4.8]]) g.wall(a, b, a.h, b.h, 0.5, lo, hi, 0xb4bbc2, 0xcfd4d9);
+        if (i % 2 === 0) g.wall(a, { x: a.x + (b.x - a.x) * 0.1, y: a.y + (b.y - a.y) * 0.1 }, a.h, a.h, 0.8, 0, 5, 0x8e969e);
+        if (straight.has(i)) this.fence.push(a.x, a.h + 5, a.y, b.x, b.h + 5, b.y);
       }
     }
   }
@@ -453,12 +589,15 @@ export class TrackMesh {
     const sc = CONFIG.scenery;
     const r = sc.tireRadius * 0.6;
     const minSep = sc.tireRadius * 2 * 1.6;
+    const top = new Set([...this.layout.runs].sort((a, b) => b.peakSeverity - a.peakSeverity).slice(0, 3));
     const runPts: Pt3[][] = this.layout.runs.map((run) => {
+      if (this.street && !top.has(run)) return [];
       const m = run.indices.length;
       const idx = run.indices.slice(Math.floor(m * 0.25), Math.ceil(m * 0.75)).filter((i) => !this.track.nearSelf[i]);
       if (idx.length < 2) return [];
-      const line = idx.map((i) => this.edge(i, -run.turnSign, 12 + sc.runOffWidth + 4, 0));
-      const own = this.track.def.width / 2 + 12 + sc.runOffWidth;
+      const reach = this.street ? 4 + sc.runOffWidth * 0.5 + 3 : 12 + sc.runOffWidth + 4;
+      const line = idx.map((i) => this.edge(i, -run.turnSign, reach, 0));
+      const own = this.track.def.width / 2 + reach - 4;
       return resampleByDistance(line, r * 2).filter((p) => !this.foreign(p, own));
     });
     const keep = runPts.map((pts) => pts.map(() => true));
@@ -497,7 +636,7 @@ export class TrackMesh {
     const c = new Color();
     let k = 0;
     for (const t of tyres) {
-      const base = Math.min(t.p.h, this.terrain.heightAt(t.p.x, t.p.y)) - 0.5;
+      const base = this.terrain.heightAt(t.p.x, t.p.y) + 0.4;
       for (let lvl = 0; lvl < stack; lvl++) {
         m.makeTranslation(t.p.x, base + h / 2 + lvl * h, t.p.y);
         mesh.setMatrixAt(k, m);

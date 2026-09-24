@@ -24,6 +24,8 @@ interface TrackEntry {
   verso?: "cw" | "ccw";
   /** Scenery theme (default "parco"): trees and grass, a forest, a city, or a harbour city. */
   tema?: TrackTheme;
+  /** Street circuit: barriers at the kerb, sidewalks and buildings instead of run-off. */
+  cittadino?: boolean;
   /** Per-circuit size lever: multiplies fallback width and car size (default 1). */
   scale?: number;
   /** Per-circuit kerb size lever: multiplies kerb width + cell length (default 1). */
@@ -82,6 +84,7 @@ const svgTracks: TrackDef[] = lapTimes
       kerbScale: entry.kerbScale ?? 1,
       verso: entry.verso,
       theme: entry.tema,
+      street: entry.cittadino ?? false,
       gearDistribution: gearArray(entry.distribuzione_marce),
       telemetry: telemetryPoints(entry.telemetria),
       lapLengthM: entry.lunghezza_metri,

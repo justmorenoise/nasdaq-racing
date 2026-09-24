@@ -36,6 +36,8 @@ export interface TrackDef {
   verso?: "cw" | "ccw";
   /** Scenery theme for the 3D surroundings (render-only). */
   theme?: TrackTheme;
+  /** Street circuit (render-only): barriers at the kerb, sidewalks, no gravel. */
+  street?: boolean;
   /** Gear-usage distribution (gears 1..8): the % of the lap spent in each gear,
    *  used to derive the gearbox shift points for this circuit. From
    *  `distribuzione_marce` in circuits.json; defaults applied if absent. */
@@ -465,7 +467,8 @@ export class Track {
     const lapM = this.def.lapLengthM;
     if (!prof?.length || !lapM) return;
     const remap = telemetryDistanceRemap(this.samples, this.def.telemetry, this.length, this.startDist, lapM);
-    const unitsPerM = (this.length / lapM) * ELEVATION_EXAGGERATION;
+    // Street circuits climb through a town: exaggerating them turns hillsides into cliffs.
+    const unitsPerM = (this.length / lapM) * (this.def.street ? 1 : ELEVATION_EXAGGERATION);
     const pts = prof.map(([d, e]) => ({ pos: remap(d), h: e * unitsPerM })).sort((a, b) => a.pos - b.pos);
     const pos = pts.map((p) => p.pos);
     const hs = pts.map((p) => p.h);

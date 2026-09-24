@@ -45,6 +45,7 @@ export class Camera3D {
   private shake = 0;
   private tmp = new Vector3();
   private meanH = 0;
+  private pinned: Rig | null = null;
 
   constructor(
     private camera: PerspectiveCamera,
@@ -272,7 +273,19 @@ export class Camera3D {
     return this.rigFrom(cam, at, fov);
   }
 
+  /** Dev inspection: pin the camera to a fixed rig (null releases it). */
+  inspect(rig: { x: number; y: number; h: number; yaw: number; pitch: number; dist: number } | null): void {
+    this.pinned = rig
+      ? { target: new Vector3(rig.x, rig.h, rig.y), yaw: rig.yaw, pitch: rig.pitch, dist: rig.dist, fov: CONFIG.camera.fov }
+      : null;
+  }
+
   update(dt: number): void {
+    if (this.pinned) {
+      this.cur = { ...this.pinned, target: this.pinned.target.clone() };
+      this.apply();
+      return;
+    }
     const c = CONFIG.camera;
     this.clock += dt;
     this.sinceSwitch += dt;

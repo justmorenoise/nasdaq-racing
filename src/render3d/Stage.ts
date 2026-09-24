@@ -135,8 +135,8 @@ export class Stage {
     cam.far = r * 7;
     cam.updateProjectionMatrix();
     const fog = this.scene.fog as Fog;
-    fog.near = r * 2.6;
-    fog.far = r * 10;
+    fog.near = Math.max(1500, r * 4);
+    fog.far = Math.max(6000, r * 14);
     // AO sampling radius follows the framing (world units).
     this.ao.updateGtaoMaterial({ radius: Math.max(4, r * 0.02) });
   }

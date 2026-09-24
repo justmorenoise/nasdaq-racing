@@ -6,6 +6,8 @@ import { Stage } from "./render3d/Stage";
 import { TrackMesh } from "./render3d/TrackMesh";
 import { Scenery3D } from "./render3d/Scenery3D";
 import { Environment3D } from "./render3d/Environment3D";
+import { OsmEnvironment } from "./render3d/OsmEnvironment";
+import { OsmWorld } from "./render3d/osm";
 import { Terrain } from "./render3d/Terrain";
 import { Occupancy } from "./render3d/Occupancy";
 import { loadKit } from "./render3d/Kit";
@@ -79,13 +81,22 @@ async function boot() {
 
   const [track] = await Promise.all([buildTrack(trackId), loadCarModel(), loadKit()]);
   const layout = computeLayout(track);
-  const terrain = new Terrain(track);
+  // Real surroundings from OpenStreetMap, fitted onto the drawn circuit (null = procedural only).
+  const osm = await OsmWorld.load(track);
+  const terrain = new Terrain(track, osm);
   stage.scene.add(terrain.mesh, terrain.skirt);
-  stage.scene.add(new TrackMesh(track, layout, terrain).group);
   const occupancy = new Occupancy();
-  const scenery = new Scenery3D(track, layout, terrain, occupancy);
+  const osmEnv = osm ? new OsmEnvironment(track, terrain, occupancy, osm) : null;
+  osmEnv?.prepareGround();
+  stage.scene.add(new TrackMesh(track, layout, terrain, osm).group);
+  const scenery = new Scenery3D(track, layout, terrain, occupancy, osm);
   stage.scene.add(scenery.group);
-  stage.scene.add(new Environment3D(track, terrain, occupancy).group);
+  if (osmEnv) {
+    osmEnv.populate();
+    stage.scene.add(osmEnv.group);
+  } else {
+    stage.scene.add(new Environment3D(track, terrain, occupancy).group);
+  }
 
   // Rubber marks accumulate under the cars at hard-braking corners.
   const skid = new SkidMarks3D(track);
@@ -208,6 +219,12 @@ async function boot() {
     raceHud.podium,
   );
   if (CONFIG.debug.showGear) overlay.append(gearHud);
+  if (osm) {
+    const credit = document.createElement("div");
+    credit.className = "map-credit";
+    credit.textContent = osm.raw.attribution;
+    overlay.append(credit);
+  }
 
   // Persistent compliance note for the sponsored affiliate CTAs.
   if (affiliateEnabled) {
@@ -451,6 +468,7 @@ async function boot() {
     track,
     scenery,
     terrain,
+    osm,
     stage,
     audio,
     frame,
