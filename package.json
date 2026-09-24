@@ -12,9 +12,10 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.106.2",
-    "pixi.js": "^8.6.6"
+    "three": "^0.180.0"
   },
   "devDependencies": {
+    "@types/three": "^0.180.0",
     "typescript": "^5.7.3",
     "vite": "^6.0.7"
   }

@@ -71,6 +71,21 @@ export const CONFIG = {
     chaseZoom: 3.0, // base zoom in chase mode (slow corners)
     chaseZoomSpeedSpread: 0.35, // how much speed pulls the zoom out on straights
     fullPadding: 0.08, // fraction padding around track in full view
+    fov: 38, // vertical field of view (degrees) at rest
+    fovSpeedBoost: 9, // extra degrees of FOV flat out in chase (sense of speed)
+    fullPitch: 0.95, // full view tilt above the horizon (radians, ~54°)
+    fullYawSwing: 0.16, // slow orbit drift amplitude in full view (radians)
+    fullYawPeriod: 70, // seconds per orbit drift cycle
+    chasePitchSlow: 0.78, // chase tilt in slow corners (radians, ~45°)
+    chasePitchFast: 0.6, // chase tilt flat out (lower = more speed)
+    chaseMinDist: 170, // closest the chase camera gets (small screens)
+    chaseYawRate: 2.2, // how fast the chase camera swings behind the car
+    chaseFollowRate: 9, // how tightly the chase camera tracks the car
+    lookAhead: 26, // chase target lead ahead of the car (world units)
+    tvCamCount: 6, // trackside TV cameras (at the sharpest corners)
+    tvCamOffset: 150, // their distance outside the track edge
+    tvCamHeight: 80,
+    tvCamRange: 1100, // beyond this the director falls back to the chase cam
   },
 
   /** Overtake visuals. */

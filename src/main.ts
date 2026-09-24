@@ -1,15 +1,17 @@
 import "./style.css";
-import { Application, Container } from "pixi.js";
+import { Raycaster, Vector2, Vector3 } from "three";
 import { buildTrack, TRACKS, resolveTrackParam, trackParamFor } from "./track/tracks";
 import { computeLayout } from "./track/corners";
-import { TrackView } from "./render/TrackView";
-import { loadGrassBackground } from "./render/textures";
-import { Scenery } from "./render/Scenery";
-import { CarView } from "./render/CarView";
-import { SkidMarks } from "./render/SkidMarks";
-import { SparksLayer } from "./render/SparksLayer";
-import { Camera } from "./render/Camera";
-import { Minimap } from "./render/Minimap";
+import { Stage } from "./render3d/Stage";
+import { TrackMesh } from "./render3d/TrackMesh";
+import { loadGrassBackground } from "./render3d/textures";
+import { Scenery3D } from "./render3d/Scenery3D";
+import { CarView3D } from "./render3d/CarView3D";
+import { loadCarModel } from "./render3d/CarModel";
+import { SkidMarks3D } from "./render3d/SkidMarks3D";
+import { Sparks3D } from "./render3d/Sparks3D";
+import { Camera3D } from "./render3d/Camera3D";
+import { Minimap } from "./ui/Minimap";
 import { RaceModel } from "./sim/RaceModel";
 import { SimulatedFeed } from "./feed/SimulatedFeed";
 import { SupabaseFeed } from "./feed/SupabaseFeed";
@@ -39,15 +41,7 @@ async function boot() {
   stageWrap.className = "stage-wrap";
   host.appendChild(stageWrap);
 
-  const app = new Application();
-  await app.init({
-    background: "#0a0e14",
-    resizeTo: stageWrap,
-    antialias: true,
-    autoDensity: true,
-    resolution: Math.min(window.devicePixelRatio || 1, 2),
-  });
-  stageWrap.appendChild(app.canvas);
+  const stage = new Stage(stageWrap);
 
   const params = new URLSearchParams(location.search);
   // La lingua dell'interfaccia: `?lang=` la passa l'iframe di morenoise.it.
@@ -80,33 +74,20 @@ async function boot() {
   // back to the default top 20 when there's no saved or shared selection.
   const initialSymbols = loadGridSelection(params) ?? [...DEFAULT_SYMBOLS];
 
-  const world = new Container();
-  app.stage.addChild(world);
-
-  const track = await buildTrack(trackId);
-  await loadGrassBackground();
+  const [track] = await Promise.all([buildTrack(trackId), loadGrassBackground(), loadCarModel()]);
   const layout = computeLayout(track);
-  world.addChild(new TrackView(track, layout).container);
-  const scenery = new Scenery(track, layout);
-  world.addChild(scenery.container);
+  stage.scene.add(new TrackMesh(track, layout).group);
+  const scenery = new Scenery3D(track, layout);
+  stage.scene.add(scenery.group);
 
   // Rubber marks accumulate under the cars at hard-braking corners.
-  const skid = new SkidMarks(track, app.renderer);
-  world.addChild(skid.container);
-
-  const carLayer = new Container();
-  world.addChild(carLayer);
-  // Sparks fly up from car-to-car contact, above the bodies.
-  const sparks = new SparksLayer();
-  world.addChild(sparks.container);
-  // Crane jibs overhang the track, so they sit above the cars, marks and sparks.
-  world.addChild(scenery.cranesLayer);
-  // Labels render above everything so names are never occluded in a pack.
-  const labelLayer = new Container();
-  world.addChild(labelLayer);
+  const skid = new SkidMarks3D(track);
+  stage.scene.add(skid.mesh);
+  const sparks = new Sparks3D();
+  stage.scene.add(sparks.lines);
 
   const model = new RaceModel(track, initialSymbols);
-  const camera = new Camera(world, track, model, app.screen);
+  const camera = new Camera3D(stage.camera, track, layout, model, stage);
 
   let directorOn = false;
   // Picking a car (on track or in the standings) is the user taking manual
@@ -119,16 +100,13 @@ async function boot() {
     camera.toggleFollow(sym);
   };
 
-  const carViews = new Map<string, CarView>();
+  const carViews = new Map<string, CarView3D>();
   const syncCarViews = () => {
     for (const [sym, car] of model.cars) {
       if (carViews.has(sym)) continue;
-      const view = new CarView(car, labelLayer, track.def.scale ?? 1);
-      view.root.eventMode = "static";
-      view.root.cursor = "pointer";
-      view.root.on("pointertap", () => followManually(sym));
+      const view = new CarView3D(car, track.def.scale ?? 1, followManually);
       carViews.set(sym, view);
-      carLayer.addChild(view.root);
+      stage.scene.add(view.root);
     }
     for (const [sym, view] of carViews) {
       if (model.cars.has(sym)) continue;
@@ -138,9 +116,22 @@ async function boot() {
   };
   syncCarViews();
 
+  // Click/tap on a car body in the scene → chase it (a short drag is ignored).
+  const ray = new Raycaster();
+  const ndc = new Vector2();
+  let downAt: { x: number; y: number } | null = null;
+  stage.renderer.domElement.addEventListener("pointerdown", (e) => (downAt = { x: e.clientX, y: e.clientY }));
+  stage.renderer.domElement.addEventListener("pointerup", (e) => {
+    if (!downAt || Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y) > 6) return;
+    const r = stage.renderer.domElement.getBoundingClientRect();
+    ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+    ray.setFromCamera(ndc, stage.camera);
+    const hit = ray.intersectObjects([...carViews.values()].map((v) => v.hit), false)[0];
+    if (hit) followManually(hit.object.userData.symbol as string);
+  });
+
   const minimap = new Minimap(track, model);
-  app.stage.addChild(minimap.container);
-  minimap.layout(app.screen.width);
+  minimap.layout(stage.width);
 
   const feed: PriceFeed = useSupabase
     ? new SupabaseFeed(supaUrl!, supaKey!)
@@ -201,6 +192,7 @@ async function boot() {
   // absolute overlay panel on desktop, an in-flow block under the circuit on
   // mobile, so the rest goes in the overlay here.
   overlay.append(
+    minimap.el,
     controls.el,
     commentary.el,
     selector.el,
@@ -252,9 +244,9 @@ async function boot() {
     const h = Math.max(hMin, h0 - host.scrollTop);
     if (Math.round(stageWrap.clientHeight) !== h) {
       stageWrap.style.height = `${h}px`;
-      // Resize the renderer now rather than waiting for Pixi's rAF-based
-      // ResizeObserver, so the circuit reframes in lock-step with the scroll.
-      app.resize();
+      // Resize now rather than on the next ResizeObserver tick, so the circuit
+      // reframes in lock-step with the scroll.
+      onResize();
     }
     const collapsed = h <= hMin + 2;
     if (collapsed !== stageCollapsed) {
@@ -288,10 +280,12 @@ async function boot() {
   host.addEventListener("scroll", updateStage, { passive: true });
   window.addEventListener("resize", updateStage);
 
-  app.renderer.on("resize", () => {
+  function onResize() {
+    stage.resize();
     camera.resize();
-    minimap.layout(app.screen.width);
-  });
+    minimap.layout(stage.width);
+  }
+  new ResizeObserver(onResize).observe(stageWrap);
 
   // Keyboard: Esc / F returns to the full view.
   window.addEventListener("keydown", (e) => {
@@ -301,6 +295,7 @@ async function boot() {
   const gapSeconds = (distAhead: number) =>
     (distAhead * track.def.baseLapTime) / track.length;
 
+  const tmpV = new Vector3();
   let settled = false;
   let uiAccum = 0;
   let directorAccum = 0;
@@ -328,13 +323,14 @@ async function boot() {
         directorAccum = 0;
         const battles = detectBattles(model.cars.values(), track);
         const target = battles[0]?.lead ?? model.order[0]?.symbol;
-        if (target) camera.follow(target);
+        if (target) camera.director(target);
       }
     }
 
     camera.update(dt);
-
-    const labelScale = 1 / camera.scale;
+    // Shadows only where the camera looks; off on the tiny mobile thumbnail.
+    stage.setShadows(!stageCollapsed);
+    stage.focusShadows(camera.focus.x, camera.focus.z, camera.focusRadius);
     // P1 = best performer by % (top of the standings).
     let leaderSym: string | undefined;
     let bestPct = -Infinity;
@@ -377,13 +373,13 @@ async function boot() {
     // Shrink the P1 ring on the reduced mobile circuit so it doesn't dominate.
     const ringScale = stageCollapsed ? 0.5 : 1;
     for (const [sym, car] of model.cars) {
-      // Labels follow the global toggle (rendered in a top layer so names in a
-      // pack never hide behind another car).
+      const pose = model.poseForCar(car);
       carViews
         .get(sym)
         ?.update(
-          model.poseForCar(car),
-          labelScale,
+          pose,
+          clk.state === "running" ? dt : 0,
+          camera.worldPerPx(tmpV.set(pose.x, 0, pose.y)),
           showLabels,
           sym === leaderSym,
           ringScale,
@@ -391,6 +387,7 @@ async function boot() {
         );
     }
     minimap.update(camera.followedSymbol);
+    stage.render();
 
     // Throttle DOM updates (~7/s) to avoid layout thrash.
     uiAccum += dt;
@@ -433,7 +430,11 @@ async function boot() {
     }
   };
 
-  app.ticker.add(() => frame(Math.min(app.ticker.deltaMS / 1000, 0.05)));
+  let last = performance.now();
+  stage.renderer.setAnimationLoop((now) => {
+    frame(Math.min((now - last) / 1000, 0.05));
+    last = now;
+  });
 
   // Dev inspection hook (also lets the preview drive frames while the page is
   // hidden, since requestAnimationFrame is throttled there).
@@ -442,9 +443,9 @@ async function boot() {
     camera,
     track,
     scenery,
-    app,
+    stage,
     frame,
-    render: () => app.renderer.render(app.stage),
+    render: () => stage.render(),
   };
 }
 
