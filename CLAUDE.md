@@ -91,6 +91,18 @@ to draw. Keep these layers decoupled — the sim must never import from `render3
   `KitInstancer`. `Scenery3D.ts` (stands with tiers/seat blocks/crowd/roof/flags, pit building + paddock + car
   park, telehandlers, marshal/TV towers, gantries, billboards) and `Environment3D.ts` (tree groves, city blocks
   with painted streets, harbour) share an `Occupancy` grid so nothing overlaps; `pitInfo.ts` has the pit window.
+  **OpenStreetMap guide** (`osm.ts`, data in `public/osm/<id>.json` from `_risorse/osm/process.py`, ODbL,
+  attribution shown bottom-right): `OsmWorld.load` fits OSM to the drawn circuit (ICP on the `type=circuit`
+  relation lap, local residual correction field, outward push off our wider asphalt); `map`/`mapRaw`/`mapBox`
+  convert features. With OSM: the sea comes from the real coastline (flood-filled sea mask in `Terrain`), lakes
+  are carved, `OsmEnvironment` (2 phases: `prepareGround` terraces the terrain under real roads before the
+  trackside is built; `populate` after the stands) places kit houses at real buildings, draped roads with
+  pavements/centre lines/zebra crossings/lamps, car parks, woods + mapped trees + theme filler groves away from
+  town, harbour boats; `Scenery3D` puts stands at real OSM stands; `TrackMesh` uses real gravel traps when ≥8 are
+  mapped. Without OSM data the procedural `Environment3D` is used. `circuits.json` `cittadino: true` (Monaco) =
+  street circuit: Armco at the kerb, sidewalks, few tarmac escapes, no elevation exaggeration. Track-edge
+  offsets are capped by the bend radius on the inside (no folded kerbs); overpasses get ≥6.5 m headroom
+  (`Track.liftOverpasses`). Dev: `camera.inspect({x,y,h,yaw,pitch,dist})` pins the camera.
   `Stage.ts`: low warm sun with soft shadows following the camera focus, hemisphere fill, GTAO (off on small
   views), AgX tone mapping and a desaturating grade pass. Cars: `CarModel.ts` loads `public/models/car.glb`
   (`_risorse/blender/build_car.py`), merged per material; `CarView3D` tilts the car to the track grade (slope

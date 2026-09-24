@@ -476,6 +476,43 @@ export class Track {
       const x = ((((s.dist - this.startDist) % this.length) + this.length) % this.length) / this.length;
       s.h = interpCircular(pos, hs, x);
     }
+    this.liftOverpasses(unitsPerM);
+  }
+
+  /**
+   * Where the lap crosses itself (Suzuka's figure-eight), guarantee headroom:
+   * the smoothed elevation profile flattens the real bridge, so the upper pass
+   * is raised with a smooth bump until it clears the lower one by ~6 m.
+   */
+  private liftOverpasses(unitsPerM: number): void {
+    const s = this.samples;
+    const n = s.length - 1;
+    const L = this.length;
+    const clear = 6.5 * unitsPerM;
+    const reach = this.def.width * 0.8;
+    const bumps: { i: number; need: number }[] = [];
+    for (let i = 0; i < n; i += 2) {
+      for (let j = i + 1; j < n; j += 2) {
+        const da = Math.abs(s[i].dist - s[j].dist);
+        if (Math.min(da, L - da) < L * 0.1) continue;
+        if (Math.hypot(s[i].x - s[j].x, s[i].y - s[j].y) > reach) continue;
+        const [up, lo] = s[i].h >= s[j].h ? [i, j] : [j, i];
+        const need = clear - (s[up].h - s[lo].h);
+        if (need > 0) bumps.push({ i: up, need });
+      }
+    }
+    if (!bumps.length) return;
+    // Merge into one bump per crossing (the strongest need at each spot).
+    const sigma = L * 0.018;
+    const add = new Float64Array(n + 1);
+    for (const b of bumps) {
+      for (let k = 0; k <= n; k++) {
+        const da = Math.abs(s[k].dist - s[b.i].dist);
+        const d = Math.min(da, L - da);
+        add[k] = Math.max(add[k], b.need * Math.exp(-(d * d) / (2 * sigma * sigma)));
+      }
+    }
+    for (let k = 0; k <= n; k++) s[k].h += add[k];
   }
 
   /** Surface height at an arc-length distance (auto-wrapped). */

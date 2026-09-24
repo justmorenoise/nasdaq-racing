@@ -566,7 +566,7 @@ export class TrackMesh {
         if (Math.min(da, L - da) < L * 0.08) continue;
         if (Math.hypot(s[i].x - s[j].x, s[i].y - s[j].y) < this.track.def.width * 1.6) lower = Math.min(lower, s[j].h);
       }
-      if (!(s[i].h - lower > 12)) continue;
+      if (!(s[i].h - lower > 6)) continue;
       for (const sgn of [1, -1]) {
         const a = this.edge(i, sgn, 1, 0);
         const b = this.edge(i + 1, sgn, 1, 0);

@@ -428,7 +428,8 @@ export class Scenery3D {
           this.kit.add("lamp", lp.x, p.h + 0.4, lp.y, heading + Math.PI, 1.3);
         }
       }
-      this.carPark(sub, side, padOut + 30);
+      // Real car parks come from OSM; only invent one without it.
+      if (!this.osm) this.carPark(sub, side, padOut + 30);
     }
   }
 
@@ -447,15 +448,17 @@ export class Scenery3D {
     if (!this.occ.free(c.x, c.y, hl * 0.9)) return;
     if (this.terrain.trackDistance(c.x, c.y) < this.half + 150) return;
     this.occ.add(c.x, c.y, hl);
-    const h = this.ground(c.x, c.y);
-    this.solids.box(c.x, c.y, ax, ay, hl, hd, h - 6, h + 0.4, 0x8f9298, 0x7c7f85);
+    const corner = (u: number, v: number) => ({ x: c.x + ax * u + ox * v, y: c.y + ay * u + oy * v });
+    const foot = [corner(-hl, -hd), corner(hl, -hd), corner(hl, hd), corner(-hl, hd)];
+    const tops = foot.map((p) => this.ground(p.x, p.y) + 0.4);
+    this.solids.prism(foot, tops.map((t) => t - 6), tops, 0x8f9298, 0x7c7f85);
     const cars = [0xe8e4da, 0x2a2d33, 0xc8412f, 0x4e7fc4, 0x9aa3ab, 0xe6b422, 0x5aa97b];
     for (let row = -2; row <= 2; row++) {
       for (let u = -hl + 8; u < hl - 8; u += 11) {
         if (this.rand() < 0.2) continue;
         const x = c.x + ax * u + ox * row * 20;
         const y = c.y + ay * u + oy * row * 20;
-        this.kit.add("car_parked", x, h + 0.4, y, Math.atan2(oy, ox) + (row % 2 ? Math.PI : 0), 1, this.pick(cars));
+        this.kit.add("car_parked", x, this.ground(x, y) + 0.4, y, Math.atan2(oy, ox) + (row % 2 ? Math.PI : 0), 1, this.pick(cars));
       }
     }
   }
@@ -534,7 +537,7 @@ export class Scenery3D {
       if (!this.occ.free(p.x, p.y, 18) || this.terrain.trackDistance(p.x, p.y) < this.half + 80) continue;
       this.occ.add(p.x, p.y, 18);
       const heading = Math.atan2(-s[i].ny * out, -s[i].nx * out);
-      this.kit.add("billboard", p.x, this.ground(p.x, p.y), p.y, heading, 1.6, this.pick(TEAM));
+      this.kit.add("billboard", p.x, this.ground(p.x, p.y), p.y, heading, 1.15, this.pick(TEAM));
     }
   }
 }
