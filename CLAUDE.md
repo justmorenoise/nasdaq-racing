@@ -20,10 +20,10 @@ is abstracted so a real eToro feed can drop in later (see "Phase 2" below).
 
 Pure front-end. Everything runs in the browser, structured as a one-way pipeline:
 
-**feed (data) → sim (model) → render (Pixi) + ui (DOM overlay)**
+**feed (data) → sim (model) → render3d (Three.js) + ui (DOM overlay)**
 
-The `main.ts` game loop drives a single `app.ticker` that advances the sim by `dt` and asks the renderer
-to draw. Keep these layers decoupled — the sim must never import from `render/` or `ui/`.
+The `main.ts` game loop drives a single `renderer.setAnimationLoop` that advances the sim by `dt` and asks the renderer
+to draw. Keep these layers decoupled — the sim must never import from `render3d/` or `ui/`.
 
 - **`feed/`** — `PriceFeed` is the abstraction boundary: it emits `PriceUpdate {symbol, changePct, price, ts}`.
   `SupabaseFeed` is the **real-data** adapter (snapshot `select` + Realtime `postgres_changes` on the
@@ -71,37 +71,46 @@ to draw. Keep these layers decoupled — the sim must never import from `render/
   Cars snap into their slot on the first frame that has real data (`seeded`). Race order = `progress`, which
   tracks the standings. `overtake.ts` adds cosmetic lateral lane changes; `battles.ts` detects duels (two
   strategies in `config.ts`); `RaceClock.ts` maps the US session (09:30–16:00 ET) to pre/running/finished
-  with a dev time override. Tunables in `config.ts` → `pace`.
+  with a dev time override (`?at=<ISO>` shifts "now", e.g. to after the close). Tunables in `config.ts` → `pace`.
   Each `Car` also accumulates **session stats**: `timeInP1` (laps led), `overtakes` (on-track positions
   gained, counted in `RaceModel.countOvertakes`) and a decaying `momentum` (recent net % move). The model
   exposes `momentumLeaderSymbol()` (the "fastest lap" / hottest climber, distinct from the cumulative
   leader) and `driverOfTheDay()` (most overtakes). These feed the badges below and a future betting layer.
-- **`render/`** — Pixi. Cars are textured sprites from `/car/car.svg` (`carSprite.ts`): the `base` body
-  path is recolored to the stock's primary color and the `casco` (helmet) to `color2` if set, else a
-  stable per-symbol random color; textures are cached per color combo. `CarView` also has a boost aura, a
-  gold P1 ring, and an upright ticker label (global on/off toggle in `Controls`). The whole game world
-  lives in one container that `Camera.ts` translates/scales.
-  Two camera modes with eased transitions: **Full** (fit whole track) and **Chase** (follow one car,
-  zoom out on straights / in on corners based on current speed). `Minimap.ts`, `TrackView.ts`, `CarView.ts`.
-  `CarView` also draws a purple "fastest lap" ring for the `momentumLeaderSymbol`. `SkidMarks.ts` is a
-  persistent rubber-decal layer (between Scenery and the cars): a single world-space `RenderTexture` that
-  cars stamp into (`clear:false`) at hard-braking corners, so marks accumulate with bounded memory.
-- **`audio/`** — `AudioEngine.ts`: mostly **synthesized** race audio (one sample, `circuits/crowd.mp3`) for a *single* focused
-  car (P1 in full view, the chased car otherwise) to avoid 20-engine cacophony — an **8-speed gearbox** where
-  the engine pitch tracks *revs within the current gear* (the note saws up toward the redline, then drops on
-  each upshift and jumps up on a downshift, so shifts are audible), with a fast multi-gear *scalata* burst
-  into corners. The shift points are **per-circuit** (`track.gearBounds`): derived from the circuit's
-  `telemetria` (real gear per corner) when present, else from `distribuzione_marce` (gear-usage %) via
-  `track/gearbox.ts` — so Monza lives in 7th/8th and Monaco in 2nd–4th, and 1st is never used unless a circuit
-  weights it (the hairpin). A debug `CONFIG.debug.showGear` badge (the **info_view**, sized to the minimap,
-  stacked between minimap and the Live pill) shows the focused car's gear + km/h (`track.speedRangeKmh`) on the
-  first line and the current telemetry sector name (`track.sectorAt`, "(Turn …)" suffix stripped) on a second
-  line. Plus a tyre
-  screech on corner braking, a
-  crowd cheer (`crowd.mp3`) — a looping sample whose gain is **opened while the focused car is within
-  `CROWD_WINDOW` of any grandstand** (`Scenery.grandstandDists`), so a row of consecutive stands reads as
-  one continuous cheer that only **fades out** (over `CROWD_FADE_OUT`) once past the last stand. Plus a team-radio blip on an overtake.
-  Off by default; the 🔊 toggle in `Controls` builds the `AudioContext` on the first click (autoplay policy).
+- **`render3d/`** — Three.js, low-poly diorama look (refs in `_risorse/ref`). The 2D track plane maps to the
+  ground: world (x, y) → Three (x, h, y), Y up (`coords.ts`; `headingToRotY`, stacked ground `LAYER` heights).
+  `Stage.ts` owns renderer/scene/camera, hemisphere + sun light with soft shadows whose frustum follows the camera
+  focus (`focusShadows`; shadows off on the collapsed mobile thumbnail), and the CSS2D label layer.
+  `TrackMesh.ts` bakes the flat ground (asphalt from the real edge loops with infield holes, gravel run-off, kerbs,
+  lines, checkered start/finish + grid boxes) through `FlatBatch` (one mesh per material, world-space UVs, vertex
+  colours) plus instanced tyre stacks. `Scenery3D.ts` places grandstands with instanced spectators, pit lane/wall,
+  garages and team trucks, cranes and ad boards (same placement rules as the old 2D scenery) as merged
+  vertex-coloured `Solids`; it exposes `grandstandDists` (crowd audio) and `blockers`. `Environment3D.ts` adds the
+  themed surroundings from `circuits.json` `tema` (`parco` | `bosco` | `citta` | `porto`): instanced tree groves,
+  street-grid city blocks, sea + quay + boats — seeded per circuit so it's stable.
+  Cars: `CarModel.ts` loads `public/models/car.glb` (built by `_risorse/blender/build_car.py`, run with
+  `Blender --background --factory-startup --python build_car.py`; materials `body`/`helmet`/`carbon`/`tyre`, nodes
+  `wheel_*`) and merges it per material into a template (procedural stand-in if the GLB is missing). `CarView3D`
+  paints `body` with the stock colour and `helmet` with `color2` or a stable random colour, spins the wheels, adds
+  roll/pitch, gold P1 / purple "fastest lap" ground rings and a DOM ticker label (click → chase; a raycast on an
+  invisible hit box handles clicks on the car). `SkidMarks3D` is an instanced ring buffer of rubber streaks,
+  `Sparks3D` additive line particles. `Camera3D.ts` keeps the old API (`follow`/`toggleFollow`/`showFull`/
+  `followedSymbol`/`currentMode`) with three shots: **full** (bounds fitted by bisection at a tilt, slow yaw
+  drift), **chase** (behind/above the car, swings with it, pulls back and widens FOV with speed, shake under heavy
+  braking) and **tv** (trackside cameras at the sharpest corners, hard cuts; used by the auto-director via
+  `director()`). Tunables in `CONFIG.camera`. The minimap is a DOM canvas (`ui/Minimap.ts`).
+- **`audio/`** — `AudioEngine.ts`: race audio for a *single* focused car (P1 in full view, the chased car
+  otherwise). The engine is **sample-based**: two seamless loops (`public/audio/engine_mid|high.wav`, cut from real
+  F1 V8 recordings by `_risorse/audio_src/make_loops.py`; perceived pitch in `engine.json`) equal-power
+  cross-faded and re-pitched with `playbackRate` to follow the **revs within the current gear** of an 8-speed box
+  whose shift points are per-circuit (`track.gearBounds`, from telemetry or `distribuzione_marce` via
+  `track/gearbox.ts`). Upshift = short ignition-cut dip; downshift = one throttle blip per gear dropped; lifting
+  off closes a low-pass with overrun crackles. A second voice plays the nearest rival along the track, doppler
+  shifted. Plus a sampled tyre squeal on hard braking, the looping crowd (`circuits/crowd.mp3`) opened while the
+  focused car is within `CROWD_WINDOW` of a grandstand (fades out after the last one) and a team-radio blip on an
+  overtake. Off by default; the 🔊 toggle builds the `AudioContext` on the first click. Sample licences
+  (CC BY-SA / CC BY) are in `public/audio/CREDITS.md`.
+  A debug `CONFIG.debug.showGear` badge (the **info_view**, stacked between minimap and the Live pill) shows the
+  focused car's gear + km/h (`track.speedRangeKmh`) and the telemetry sector name (`track.sectorAt`).
 - **`ui/`** — DOM overlays above the canvas (easier to style than canvas text), inside `.ui-overlay`
   (pointer-events pass through except on widgets). `Leaderboard` (live price/Δ/Δ%, ordered by **race
   position** = `model.order` so it matches on-track order; click row → Chase that car), `Controls`
@@ -135,7 +144,7 @@ affiliate). The Finnhub key is **never** in the frontend — only the public ano
 ## Conventions
 
 - TypeScript strict, ES modules, `.ts` extensions in imports allowed (bundler resolution).
-- `dt` is **seconds** (`app.ticker.deltaMS / 1000`). All motion/easing is dt-based, never per-frame constants.
+- `dt` is **seconds** (animation-loop delta / 1000, capped at 0.05). All motion/easing is dt-based, never per-frame constants.
 
 ## Real-data backend (Supabase + Finnhub)
 
