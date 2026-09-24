@@ -190,7 +190,6 @@ export const CONFIG = {
     /** Texture tile scale: world units per texture tile (bigger = coarser). */
     asphaltTile: 64,
     grassTile: 90,
-    grassBgTile: 3, // bg.jpg tonal overlay, tiled at native 1024×1024 over the field
     gravelTile: 48,
 
     /** "New tarmac" patches: a few darker, freshly-resurfaced stretches. Each
