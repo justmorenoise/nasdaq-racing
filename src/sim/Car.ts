@@ -27,11 +27,11 @@ export class Car {
   seeded = false;
 
   // --- Session stats (drive the momentum/DOTD badges and, later, betting) ---
-  /** Seconds spent as the standings leader (P1) this session — "laps led". */
+  /** Seconds spent as the standings leader (P1) this session - "laps led". */
   timeInP1 = 0;
-  /** On-track positions gained over the session — "overtakes made". */
+  /** On-track positions gained over the session - "overtakes made". */
   overtakes = 0;
-  /** Decaying net % movement over the recent window — who's climbing *now*
+  /** Decaying net % movement over the recent window - who's climbing *now*
    *  (the "fastest lap" holder), as opposed to the cumulative % leader. */
   momentum = 0;
 

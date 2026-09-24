@@ -332,7 +332,7 @@ async function boot() {
         leaderSym = car.symbol;
       }
     }
-    // "Fastest lap" holder — the car climbing hardest right now (may be none).
+    // "Fastest lap" holder - the car climbing hardest right now (may be none).
     const momentumSym = model.momentumLeaderSymbol();
 
     // Audio tracks one car: the chased car if any, else P1. Silent unless racing.
@@ -349,7 +349,7 @@ async function boot() {
         const kmh = Math.round(
           kmhMin + ((focusCar.relSpeed - vMin) / (vMax - vMin)) * (kmhMax - kmhMin),
         );
-        // Drop the redundant "(Turn 1-2)" suffix — the corner is on screen.
+        // Drop the redundant "(Turn 1-2)" suffix - the corner is on screen.
         const sector = track.sectorAt(focusCar.progress).replace(/\s*\(.*\)\s*$/, "");
         gearHud.innerHTML =
           `<div class="gear-debug-main">${focusCar.symbol} · ${gear}ª · ${kmh} km/h</div>` +
@@ -404,7 +404,7 @@ async function boot() {
         const leader = model.order[0];
         const ahead = pos > 0 ? model.order[pos - 1] : null;
         const toLeader =
-          pos > 0 ? `+${gapSeconds(leader.progress - car.progress).toFixed(1)}s` : "—";
+          pos > 0 ? `+${gapSeconds(leader.progress - car.progress).toFixed(1)}s` : "-";
         const toAhead = ahead
           ? `+${gapSeconds(ahead.progress - car.progress).toFixed(1)}s ${ahead.symbol}`
           : t("hud.leading");

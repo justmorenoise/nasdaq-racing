@@ -379,7 +379,7 @@ canvas {
   }
 }
 
-/* Debug gear/speed readout — sits between the minimap and the Live pill, the
+/* Debug gear/speed readout - sits between the minimap and the Live pill, the
    same width as the minimap, with equal gaps above and below. */
 .gear-debug {
   position: absolute;
@@ -668,7 +668,7 @@ canvas {
   .mobile-board .lb-row:last-child {
     padding-bottom: 40px;
   }
-  /* No collapse on mobile — the whole list is meant to scroll. */
+  /* No collapse on mobile - the whole list is meant to scroll. */
   .mobile-board .lb-caret {
     display: none;
   }
@@ -677,7 +677,7 @@ canvas {
   }
 
   /* When the circuit is shrunk to its thumbnail, drop the floating chips that
-     would crowd it — the leaderboard below carries the same information. */
+     would crowd it - the leaderboard below carries the same information. */
   .stage-wrap.stage-collapsed .race-status,
   .stage-wrap.stage-collapsed .chase-info,
   .stage-wrap.stage-collapsed .commentary {

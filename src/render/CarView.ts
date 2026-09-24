@@ -83,10 +83,10 @@ export class CarView {
   /**
    * @param labelScale  1 / cameraZoom, keeps the label a constant screen size.
    * @param showLabel   whether labels are enabled (global toggle).
-   * @param isLeader    P1 — gold label + highlight ring.
+   * @param isLeader    P1 - gold label + highlight ring.
    * @param ringScale   extra multiplier on the leader ring (e.g. 0.5 to shrink
    *                    it on the mobile circuit thumbnail).
-   * @param isMomentum  current "fastest lap" holder — purple marker ring.
+   * @param isMomentum  current "fastest lap" holder - purple marker ring.
    */
   update(
     pose: CarPose,

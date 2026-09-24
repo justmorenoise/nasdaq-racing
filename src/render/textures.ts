@@ -113,7 +113,7 @@ export async function loadGrassBackground(): Promise<void> {
 
 /**
  * The hand-made grass texture (`bg.jpg`), tiled (repeat) across the whole grass
- * area as a tonal overlay — replaces the old procedural tonal blobs.
+ * area as a tonal overlay - replaces the old procedural tonal blobs.
  */
 export function grassBackgroundTexture(): Texture {
   return grassBg ?? Texture.WHITE;

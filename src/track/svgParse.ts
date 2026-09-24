@@ -21,7 +21,7 @@ export interface ParsedCircuit {
  * transformed `<g>` (e.g. suzuka-2b) fell back to a fixed-width ribbon. Here we
  * parse into a *live* (hidden) DOM so the browser's `getCTM()` gives each path's
  * cumulative transform, which we bake into the sampled points. Files with no
- * transforms (identity CTM) sample identically to before — no regression.
+ * transforms (identity CTM) sample identically to before - no regression.
  */
 export function parseCircuitSvg(raw: string, scale: number): ParsedCircuit {
   const doc = new DOMParser().parseFromString(raw, "image/svg+xml");

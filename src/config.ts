@@ -6,7 +6,7 @@ export const CONFIG = {
   /** Daily % change is clamped to this band before mapping to lap time. */
   changePctClamp: 8,
 
-  /** Debug overlays — off in normal use. */
+  /** Debug overlays - off in normal use. */
   debug: {
     /** Show the focused car's current gear (a small badge over the circuit). */
     showGear: true,
@@ -14,8 +14,8 @@ export const CONFIG = {
 
   /**
    * Broker affiliate CTAs (the "Investi" links/buttons and every eToro
-   * reference added on top of the viewer). Set to `false` to hide all of them
-   * — leaderboard ↗ buttons, podium "Investi" pills, the global "Apri conto"
+   * reference added on top of the viewer). Set to `false` to hide all of them:
+   * leaderboard ↗ buttons, podium "Investi" pills, the global "Apri conto"
    * button, the chase-cam link and the compliance disclaimer.
    */
   affiliateEnabled: false,
@@ -51,7 +51,7 @@ export const CONFIG = {
     corneringPercentile: 0.9, // curvature percentile that maps to vMin
     /** Severity curve exponent on (κ/κ_ref): 0.5 = √ (brakes a lot even for gentle
      *  bends); higher (→1) keeps medium/fast corners closer to top speed, so only
-     *  the tightest really slow down — some sweepers stay near-flat. */
+     *  the tightest really slow down - some sweepers stay near-flat. */
     corneringExp: 0.78,
     smoothing: 2, // curvature smoothing window (samples each side)
   },
@@ -104,7 +104,7 @@ export const CONFIG = {
     /** Initial particle speed range (world units/s) at full intensity. */
     speedMin: 60,
     speedMax: 220,
-    /** Downward pull on particles (world units/s²) — they arc and settle. */
+    /** Downward pull on particles (world units/s²) - they arc and settle. */
     gravity: 320,
     /** Spread half-angle around the contact tangent (radians). */
     spread: Math.PI * 0.6,
@@ -115,7 +115,7 @@ export const CONFIG = {
 
   /**
    * Decorative circuit scenery (render-only): kerbs, gravel run-off, grass,
-   * grandstands, pit/paddock, tire walls and cranes — all derived from the
+   * grandstands, pit/paddock, tire walls and cranes - all derived from the
    * track geometry, built once. Curvature is normalized per track (a high
    * percentile maps to 1) so thresholds work on any circuit.
    */

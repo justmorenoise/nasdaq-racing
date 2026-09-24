@@ -5,7 +5,7 @@ import lapData from "../../circuits/circuits.json";
 /**
  * Real circuit layouts live in the SVG files in /circuits, listed (with base lap
  * times) in circuits.json. The glob is **lazy**: only the SVG of the circuit
- * actually built gets fetched — the track menu needs just id+name from the JSON,
+ * actually built gets fetched - the track menu needs just id+name from the JSON,
  * and switching tracks reloads the page, so one SVG is ever loaded per session.
  */
 const svgLoaders = import.meta.glob("/circuits/*.svg", {

@@ -14,7 +14,7 @@ import { offsetPoint, type TrackLayout } from "../track/corners";
  */
 export class Scenery {
   readonly container = new Container();
-  /** Recovery cranes — kept in a separate layer so they render *above* the
+  /** Recovery cranes - kept in a separate layer so they render *above* the
    *  cars and skid marks (their jibs overhang the track, as in real life). */
   readonly cranesLayer = new Container();
   /** Arc-length positions of the placed grandstands, for crowd-cheer audio. */
@@ -155,7 +155,7 @@ export class Scenery {
       const halfLen = sc.standSegLen * (0.4 + Math.random() * 0.08) * lenFactor;
       const at = (d: number) => this.edgeOffset(i, out, d);
       // Skip if any footprint corner (near apron + far roof, at both ends) would
-      // land on the track — e.g. a stand whose end pokes into the next corner.
+      // land on the track - e.g. a stand whose end pokes into the next corner.
       const alongHalf = halfLen + 5;
       for (const depth of [sc.standGap - 5, sc.standGap + seatDepth + roofDepth]) {
         const c = this.edgeOffset(i, out, depth);
@@ -193,7 +193,7 @@ export class Scenery {
     }
 
     // Guarantee a minimum count on sparse circuits (e.g. Monaco, Spa) WITHOUT
-    // touching circuits that already meet it — this only runs when we're short.
+    // touching circuits that already meet it - this only runs when we're short.
     // Extra stands are spread AROUND THE LAP (farthest-point insertion) and biased
     // toward straighter spots, so they fill the empty side of the circuit and don't
     // sit awkwardly across a corner.
@@ -328,7 +328,7 @@ export class Scenery {
    * measured from the real track edge and clamped **per sample** to the local
    * infield clearance (distance to the next edge inward), so the complex shows at
    * full depth along the open straight and simply tapers where the infield
-   * narrows — visible by the finish line yet never reaching onto the far track.
+   * narrows - visible by the finish line yet never reaching onto the far track.
    */
   private pitPaddock(): Graphics {
     const g = new Graphics();
@@ -381,7 +381,7 @@ export class Scenery {
     };
 
     // Pick the deepest complex that fits a long-enough stretch of the straight, and
-    // draw it at *uniform* depth there — a clean rectangle, never tapering into the
+    // draw it at *uniform* depth there - a clean rectangle, never tapering into the
     // grass. Drops to garage-only, then pit-lane-only, on tight infields.
     const tiers: { depth: number; garage: boolean; paddock: boolean }[] = [
       { depth: padOuter, garage: true, paddock: true },

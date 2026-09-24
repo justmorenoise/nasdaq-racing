@@ -33,7 +33,7 @@ export function loadGridSelection(params: URLSearchParams): string[] | null {
       if (list.length) return list;
     }
   } catch {
-    /* private mode / corrupt value — fall through to default */
+    /* private mode / corrupt value - fall through to default */
   }
   return null;
 }

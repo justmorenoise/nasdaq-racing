@@ -22,7 +22,7 @@ function gaussian(): number {
 /**
  * Mean-reverting random walk on each stock's daily % change. Each symbol gets
  * its own volatility and a slowly drifting bias so the field spreads out over a
- * session and positions trade hands — producing overtakes and battles.
+ * session and positions trade hands - producing overtakes and battles.
  */
 export class SimulatedFeed implements PriceFeed {
   private states = new Map<string, SimState>();

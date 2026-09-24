@@ -15,8 +15,8 @@ const GEARS = 8;
 
 /**
  * Base speed profile from telemetry. The telemetry stations *are* the profile:
- * the real speed at a sequence of points around the lap (apices, plus — where the
- * data provides them — the braking/approach/exit points that shape each corner).
+ * the real speed at a sequence of points around the lap (apices, plus - where the
+ * data provides them - the braking/approach/exit points that shape each corner).
  * So the profile is a **direct interpolation** of those speeds, and the caller
  * skips its accel/brake passes (which would pull straights back below their data
  * speed and erase the late braking the data encodes).
@@ -27,7 +27,7 @@ const GEARS = 8;
  * predicts, the Parabolica ~400 m *behind*). So the corner apices (telemetry speed
  * minima) are matched to the geometric corners (curvature peaks) *in lap order*
  * (`alignTelemetry` → `monotonicMatch`), and those matched pairs anchor a
- * piecewise-linear distance→arc remap that places every other station — absorbing
+ * piecewise-linear distance→arc remap that places every other station - absorbing
  * the non-linear distortion. The profile then passes through each station's speed
  * exactly, at the spot where the track actually bends.
  */

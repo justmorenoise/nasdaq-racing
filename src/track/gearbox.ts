@@ -4,7 +4,7 @@
  * twisty high-downforce tracks (Monaco) sit in 2nd–4th, power tracks (Monza, Spa)
  * live in 7th–8th. The distribution (`distribuzione_marce` in circuits.json) sets
  * where the gear boundaries fall along the speed range, so the shifts match the
- * real character of each track — and 1st gear is essentially never used (only the
+ * real character of each track - and 1st gear is essentially never used (only the
  * single slowest point) unless a circuit gives it real weight (e.g. Monaco's
  * hairpin).
  */
@@ -44,7 +44,7 @@ export function computeGearBounds(
   let acc = 0;
   let g = 0;
   // Leading gears with no usage are disabled (edge below any real speed) so they
-  // are never selected — e.g. 1st gear on power circuits like Monza/Spa, where
+  // are never selected - e.g. 1st gear on power circuits like Monza/Spa, where
   // even the slowest point (the speed-profile floor) should be in 2nd, not 1st.
   while (g < n - 1 && cum[g] <= 1e-9) {
     bounds[g] = -Infinity;

@@ -3,7 +3,7 @@ import type { Battle } from "../sim/battles";
 import { t } from "../i18n";
 
 /**
- * "Race radio" — a small live feed of one-line commentary derived from the same
+ * "Race radio" - a small live feed of one-line commentary derived from the same
  * race state the rest of the UI reads (standings, on-track order, battles, big
  * % moves). Newest line on top; lines fade out after a few seconds. The feed is
  * rate-limited and de-duplicated so it reads like a commentator, not a log.

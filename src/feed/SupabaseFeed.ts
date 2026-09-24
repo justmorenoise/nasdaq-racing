@@ -15,7 +15,7 @@ interface PriceRow {
 /**
  * Real-data feed backed by Supabase. A scheduled Edge Function writes prices to
  * the `prices` table (one shared Finnhub key server-side); this feed reads the
- * initial snapshot and then receives live updates via Realtime — same
+ * initial snapshot and then receives live updates via Realtime - same
  * `PriceFeed` interface as the simulated feed, so nothing else changes.
  */
 export class SupabaseFeed implements PriceFeed {

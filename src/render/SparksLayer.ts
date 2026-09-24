@@ -16,7 +16,7 @@ type Pose = { x: number; y: number; tangent: number };
 
 /**
  * Short-lived sparks where two cars touch. Live particles are redrawn into a
- * single Graphics each frame (no RenderTexture — they move, arc under gravity
+ * single Graphics each frame (no RenderTexture - they move, arc under gravity
  * and fade), so the layer is cheap as long as bursts stay small. Burst size and
  * energy scale with the contact intensity, all tunable in CONFIG.sparks.
  */

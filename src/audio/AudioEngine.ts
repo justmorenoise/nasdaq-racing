@@ -6,11 +6,11 @@ import crowdUrl from "../../circuits/crowd.mp3?url";
 /**
  * Mostly-synthesized race audio for a SINGLE focused car, to avoid a cacophony
  * of twenty engines: the leader in full view, or the chased car when one is
- * followed. Generated with the Web Audio API —
+ * followed. Generated with the Web Audio API:
  *  - a continuous engine note whose pitch/volume track the car's speed,
  *  - a tyre screech on hard corner braking,
  *  - a "team radio" blip (bandpassed beep) on a boost/overtake.
- * — plus one real sample, `crowd.mp3`, that fades in as the car nears a
+ * plus one real sample, `crowd.mp3`, that fades in as the car nears a
  * grandstand and fades out as it leaves (see CROWD_* below).
  *
  * The context is created lazily on the first enable (a user gesture), per the
@@ -20,7 +20,7 @@ import crowdUrl from "../../circuits/crowd.mp3?url";
 // Engine pitch endpoints PER GEAR (revs, not speed): just after a shift the
 // revs sit low (ENGINE_MIN_HZ) and climb to the redline (ENGINE_MAX_HZ) as the
 // car accelerates through that gear; the next upshift drops back to MIN. So the
-// note saws up-and-down once per gear — that's how the shifts become audible.
+// note saws up-and-down once per gear - that's how the shifts become audible.
 const ENGINE_MIN_HZ = 180;
 const ENGINE_MAX_HZ = 500;
 const BRAKE_REL_NORM = 0.32; // below this normalised speed (and slowing) → screech

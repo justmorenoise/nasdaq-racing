@@ -13,7 +13,7 @@ const DEFAULT_SPEED_RANGE_KMH: [number, number] = [110, 340];
 
 /**
  * Derive a relative speed profile from track curvature so cars brake for corners
- * (harder for tight ones) and accelerate out onto straights toward a top speed —
+ * (harder for tight ones) and accelerate out onto straights toward a top speed,
  * without real telemetry, and independent of the track's coordinate scale.
  *
  * 1. Cornering severity = curvature relative to this track's own distribution
@@ -98,7 +98,7 @@ export function computeSpeedProfile(
   // Accel/brake limiting in lap-fraction space, twice around the closed loop.
   // The TELEMETRY profile is a direct interpolation of the real per-corner speeds
   // (including the data's own braking/approach points), so it must pass through
-  // every data point untouched — the passes would pull straights back down below
+  // every data point untouched - the passes would pull straights back down below
   // their telemetry speed and erase late-braking. Only the CURVATURE profile (a
   // raw corner-severity shape) needs the passes to grow realistic approach/exit.
   if (!useTelemetry) {

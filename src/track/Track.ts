@@ -134,7 +134,7 @@ function loopSegments(loop: Pt[]): Seg[] {
 
 /**
  * Nearest forward intersection of the ray (px,py)+t·(dx,dy), t>0, with any
- * segment — i.e. where the centerline normal first crosses a track edge.
+ * segment - i.e. where the centerline normal first crosses a track edge.
  */
 function castRay(segs: Seg[], px: number, py: number, dx: number, dy: number): Pt | null {
   let bestT = Infinity;
@@ -269,7 +269,7 @@ export class Track {
    * right edge points by casting a ray from the centerline along its ± normal
    * and taking the nearest crossing of either loop. This lands the edge point
    * exactly on the real track boundary at that station (so kerbs/run-off sit on
-   * the asphalt edge for any width), and is robust to edited layouts — no
+   * the asphalt edge for any width), and is robust to edited layouts - no
    * progress/arc-length pairing to drift. Falls back to a fixed half-width when
    * a ray finds no crossing (centerline outside the ribbon). Works with any
    * number of loops, so a circuit whose infield is split into several islands
@@ -303,7 +303,7 @@ export class Track {
     }
 
     // A ray that slips through a gap (near the start/finish or a chicane where
-    // loops nearly meet) lands on a far edge — a short spike that would make
+    // loops nearly meet) lands on a far edge - a short spike that would make
     // kerbs, run-off and tire walls jump across the track. Cap overlong casts to
     // a few times the median half-width, then a median-of-5 pass removes the
     // remaining 1–2 sample spikes so the edge stays continuous.

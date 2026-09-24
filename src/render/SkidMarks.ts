@@ -6,7 +6,7 @@ import type { Track } from "../track/Track";
 /**
  * Persistent rubber laid down where cars brake hard. Marks accumulate into a
  * single world-space RenderTexture (drawn once per stamp with `clear:false`),
- * so memory is bounded by the texture size no matter how many marks build up —
+ * so memory is bounded by the texture size no matter how many marks build up,
  * overlapping stamps darken naturally into a rubbered-in corner. Lives in its
  * own layer between the scenery and the cars.
  */

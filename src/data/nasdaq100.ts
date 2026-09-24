@@ -3,7 +3,7 @@ export interface StockDef {
   name: string;
   /** Approximate reference price, used as the simulated session-open baseline. */
   basePrice: number;
-  /** Livery / brand color (hex) — the car body. */
+  /** Livery / brand color (hex) - the car body. */
   color: number;
   /** Optional secondary color (hex) for the helmet; random if omitted. */
   color2?: number;
@@ -13,7 +13,7 @@ export interface StockDef {
  * Top ~20 Nasdaq 100 names (by weight) with brand-ish livery colors.
  * `basePrice` is the simulated-mode session baseline; aligned to recent real
  * reference prices (Finnhub previous close) so the demo starts realistically.
- * With the real feed (`feed=supabase`) these are unused — live prices win.
+ * With the real feed (`feed=supabase`) these are unused - live prices win.
  */
 export const NASDAQ_TOP: StockDef[] = [
   { symbol: "NVDA", name: "NVIDIA", basePrice: 224, color: 0x76b900 },

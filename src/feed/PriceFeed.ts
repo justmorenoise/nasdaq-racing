@@ -14,7 +14,7 @@ export type PriceListener = (updates: PriceUpdate[]) => void;
 /**
  * Abstraction boundary between the data source and the rest of the app.
  * v1 ships `SimulatedFeed`; phase 2 adds `EtoroFeed` (server-fanned WebSocket)
- * behind this same interface — nothing else in the app should change.
+ * behind this same interface - nothing else in the app should change.
  */
 export interface PriceFeed {
   /** Begin emitting updates for the given symbols. */

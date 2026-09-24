@@ -191,7 +191,7 @@ export class TrackView {
     const fill = pattern("asphalt", asphaltTexture(), CONFIG.scenery.asphaltTile);
     if (this.track.edgeLoops) {
       // The real track is the ring between the outer loop and its inner island(s).
-      // Fill the outer loop fully, then restore each infield with grass — a closed
+      // Fill the outer loop fully, then restore each infield with grass - a closed
       // ring with no start/finish seam (which an open left+right band would leave).
       // Some circuits (e.g. Monaco) enclose several separate inner islands.
       const loops = [...this.track.edgeLoops].sort(
@@ -269,7 +269,7 @@ export class TrackView {
    * corner so the walls stay short and don't reach into a neighbouring corner.
    * The barrier line is resampled by tire diameter so tires sit side by side with
    * no gaps. Positions inside the outer track boundary, or too close to a barrier
-   * already placed for another corner, are dropped — so walls never land on the
+   * already placed for another corner, are dropped - so walls never land on the
    * asphalt nor cross each other; groups shorter than 5 tires are skipped.
    */
   private tireWalls(): Graphics {
@@ -279,7 +279,7 @@ export class TrackView {
     const outer = this.outerLoop();
     const minSep = r * 2 * 1.6; // keep different corners' walls from crossing
 
-    // Pass 1: candidate tire centres per corner — the central span of each run,
+    // Pass 1: candidate tire centres per corner - the central span of each run,
     // offset to the run-off's outer edge, evenly packed, and already off the
     // asphalt. The barrier line is split where it jumps (an edge discontinuity)
     // so it never knots back on itself.
@@ -348,7 +348,7 @@ export class TrackView {
   /**
    * White track-limit lines, drawn only along the straights. Through corners
    * the kerbs already mark the edge, and on the centerline-offset fallback the
-   * edge line is exactly what self-intersects in chicanes — so we omit corners.
+   * edge line is exactly what self-intersects in chicanes - so we omit corners.
    */
   private edgeLines(): Graphics {
     const g = new Graphics();
@@ -491,7 +491,7 @@ export class TrackView {
     }
   }
 
-  /** True if (x,y) is on the asphalt ribbon — drops kerb cells that strayed there. */
+  /** True if (x,y) is on the asphalt ribbon - drops kerb cells that strayed there. */
   private onAsphalt(x: number, y: number): boolean {
     return this.track.onAsphalt(x, y);
   }

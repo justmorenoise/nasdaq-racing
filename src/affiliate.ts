@@ -1,6 +1,6 @@
 /**
  * Broker affiliate deep-links. The only place that knows where the "Invest"
- * CTAs point — so the program/URL can change via env without touching the UI.
+ * CTAs point - so the program/URL can change via env without touching the UI.
  *
  * Defaults to eToro (the planned Phase-2 data provider). With a real affiliate
  * program, set `VITE_AFFILIATE_TEMPLATE` to the tracked deep-link (keeping the
