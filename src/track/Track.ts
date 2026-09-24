@@ -7,6 +7,7 @@ import {
   type TelemetrySector,
 } from "./telemetry";
 import { catmullRomPolyline, type Pt } from "./centerline";
+import { halfWidths, racingLine } from "./racingLine";
 
 export type TrackTheme = "parco" | "bosco" | "citta" | "porto";
 
@@ -208,6 +209,13 @@ export class Track {
    *  figure-8 crossover or near-touching passes). Renderers suppress edge
    *  decorations (kerbs) here so they don't get drawn across the other pass. */
   readonly nearSelf: boolean[];
+  /** Smoothed half-width of the drawn asphalt per sample: [+normal side, −normal side]. */
+  readonly hw: [Float32Array, Float32Array];
+  /** Racing-line lateral offset per sample (world units along +normal). */
+  readonly racing: Float32Array;
+  /** Car footprint on this circuit (world units), for spacing and contact. */
+  readonly carLength: number;
+  readonly carWidth: number;
   /** Covered stretches as [startDist, endDist] arc-length ranges (may wrap). */
   readonly tunnels: [number, number][];
 
@@ -252,6 +260,11 @@ export class Track {
     }
     this.nearSelf = this.computeNearSelf();
     this.tunnels = this.computeTunnels();
+    const scale = def.scale ?? 1;
+    this.carLength = 30 * scale;
+    this.carWidth = 11 * scale;
+    this.hw = halfWidths(this.samples, def.width / 2, this.edgeLeft, this.edgeRight);
+    this.racing = racingLine(this.samples, this.hw, this.carWidth / 2 + 3);
   }
 
   /**
@@ -530,6 +543,28 @@ export class Track {
       out.push([a.dist, this.wrap(b.dist - this.def.width * 1.5)]);
     }
     return out;
+  }
+
+  /** Linear interpolation of a per-sample array at an arc-length distance. */
+  private sampleAt(arr: ArrayLike<number>, dist: number): number {
+    const d = this.wrap(dist);
+    const i = this.indexFor(d);
+    const n = this.samples.length - 1;
+    const a = this.samples[i];
+    const b = this.samples[Math.min(i + 1, n)];
+    const f = Math.min(Math.max((d - a.dist) / (b.dist - a.dist || 1e-6), 0), 1);
+    return arr[i % n] + (arr[(i + 1) % n] - arr[i % n]) * f;
+  }
+
+  /** Racing-line lateral offset at a distance (world units, +normal). */
+  racingAt(dist: number): number {
+    return this.sampleAt(this.racing, dist);
+  }
+
+  /** Usable lateral range [min, max] for a car centre at a distance (edges minus half a car). */
+  lateralLimits(dist: number): [number, number] {
+    const m = this.carWidth / 2 + 1.5;
+    return [-(this.sampleAt(this.hw[1], dist) - m), this.sampleAt(this.hw[0], dist) - m];
   }
 
   /** Whether an arc-length distance is inside a tunnel. */

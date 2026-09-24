@@ -265,6 +265,18 @@ export class OsmEnvironment {
       const r = (Math.hypot(spec.w, spec.d) / 2) * PROP_SCALE * foot * 0.62;
       if (!this.occ.free(box.x, box.y, r)) continue;
       if (this.terrain.trackDistance(box.x, box.y) < this.trackClear + r * 0.6) continue;
+      // The whole footprint on dry land, above the water line (piers and
+      // harbour moles would otherwise float houses on the sea).
+      const water = this.terrain.water;
+      if (water) {
+        const dry = [0, 1, 2, 3, 4, 5, 6, 7].every((q) => {
+          const a = (q / 8) * Math.PI * 2;
+          const x = box.x + Math.cos(a) * r;
+          const y = box.y + Math.sin(a) * r;
+          return !water.contains(x, y) && this.terrain.heightAt(x, y) > water.level + 1;
+        });
+        if (!dry) continue;
+      }
       this.occ.add(box.x, box.y, r);
       this.built.push({ x: box.x, y: box.y, r: r * 1.25 });
       const h = Math.min(

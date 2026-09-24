@@ -21,8 +21,14 @@ export class Car {
   worldSpeed = 0; // instantaneous speed (for FX / overtake logic)
   relSpeed = 0; // local profile speed in [vMin, vMax] (for camera zoom)
 
-  lane = 0; // current lateral offset fraction [-1, 1]
-  targetLane = 0;
+  /** Lateral offset from the racing line (world units, +normal), its target
+   *  and rate: a damped spring, so line changes swing smoothly. */
+  latOff = 0;
+  latTarget = 0;
+  latVel = 0;
+  /** The car being overtaken (symbol) and the side chosen for the move. */
+  passing: string | null = null;
+  passSide = 0;
   /** Whether the car has been placed into its initial slot. */
   seeded = false;
 

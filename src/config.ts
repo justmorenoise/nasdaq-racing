@@ -20,9 +20,6 @@ export const CONFIG = {
    */
   affiliateEnabled: false,
 
-  /** Lateral offset easing for overtakes (1/seconds). */
-  laneEaseRate: 2.5,
-
   /**
    * Standings-driven positioning: the on-track order reflects the % leaderboard.
    * Each car targets a slot behind the standings leader whose gap grows with the
@@ -90,8 +87,7 @@ export const CONFIG = {
 
   /** Overtake visuals. */
   overtake: {
-    laneWidthFrac: 0.32, // lateral offset as fraction of track width
-    catchGapFrac: 0.02, // start pulling out within this lap-fraction gap
+    laneOmega: 2.6, // lateral spring stiffness (rad/s): higher = snappier line changes
   },
 
   /**

@@ -20,6 +20,7 @@ import type { Pt } from "../track/centerline";
 import type { TrackLayout } from "../track/corners";
 import { FlatBatch, type Pt3 } from "./FlatBatch";
 import { pitInfo } from "./pitInfo";
+import { smoothCircular } from "../track/racingLine";
 import { Solids } from "./Solids";
 import type { Terrain } from "./Terrain";
 import type { OsmWorld } from "./osm";
@@ -55,21 +56,6 @@ function resampleByDistance(line: Pt3[], step: number): Pt3[] {
   return out;
 }
 
-/** Circular moving median + mean, to strip spikes from per-sample widths. */
-function smoothCircular(v: number[], med: number, avg: number): number[] {
-  const n = v.length;
-  const m = v.map((_, i) => {
-    const w: number[] = [];
-    for (let d = -med; d <= med; d++) w.push(v[(i + d + n) % n]);
-    w.sort((a, b) => a - b);
-    return w[w.length >> 1];
-  });
-  return m.map((_, i) => {
-    let s = 0;
-    for (let d = -avg; d <= avg; d++) s += m[(i + d + n) % n];
-    return s / (avg * 2 + 1);
-  });
-}
 
 /**
  * The racing surface as 3D meshes following the real elevation: an asphalt
@@ -84,7 +70,7 @@ export class TrackMesh {
   private batch = new FlatBatch();
   private solids = new Solids();
   private n: number;
-  private hw: [number[], number[]]; // [left, right] smoothed half-widths
+  private hw: [Float32Array, Float32Array]; // [left, right] smoothed half-widths
   private racing: number[];
   /** Smoothed signed curvature per sample (for inside-of-bend offset limits). */
   private kSm: number[];
@@ -107,7 +93,7 @@ export class TrackMesh {
     private osm: OsmWorld | null = null,
   ) {
     this.n = track.samples.length - 1;
-    this.hw = this.halfWidths();
+    this.hw = track.hw;
     this.racing = this.racingLine();
     this.kSm = smoothCircular(track.samples.slice(0, this.n).map((p) => p.signedCurvature), 3, 3);
     this.computeReach();
@@ -166,33 +152,10 @@ export class TrackMesh {
     return sgn >= 0 ? 0 : 1;
   }
 
-  /** Per-sample half-width on each side, from the real edges, de-spiked. */
-  private halfWidths(): [number[], number[]] {
-    const s = this.track.samples;
-    const half = this.track.def.width / 2;
-    const L: number[] = [];
-    const R: number[] = [];
-    for (let i = 0; i < this.n; i++) {
-      if (this.track.edgeLeft) {
-        const l = this.track.edgeLeft[i];
-        const r = this.track.edgeRight![i];
-        L.push(Math.hypot(l.x - s[i].x, l.y - s[i].y));
-        R.push(Math.hypot(r.x - s[i].x, r.y - s[i].y));
-      } else {
-        L.push(half);
-        R.push(half);
-      }
-    }
-    const clamp = (v: number) => Math.max(half * 0.55, Math.min(half * 1.6, v));
-    return [smoothCircular(L.map(clamp), 6, 3), smoothCircular(R.map(clamp), 6, 3)];
-  }
-
-  /** Lateral position of the rubbered line: toward the inside of each bend. */
+  /** Rubbered line as a lateral fraction of the half-width: the cars' racing line. */
   private racingLine(): number[] {
-    const s = this.track.samples;
-    const k = s.slice(0, this.n).map((p) => p.signedCurvature);
-    const kRef = k.map(Math.abs).sort((a, b) => a - b)[Math.floor(k.length * 0.9)] || 1e-6;
-    return smoothCircular(k.map((v) => Math.max(-0.55, Math.min(0.55, (v / kRef) * 0.5))), 4, 12);
+    const t = this.track;
+    return Array.from(t.racing, (o, i) => (o >= 0 ? o / t.hw[0][i] : o / t.hw[1][i]));
   }
 
   /** A point `d` outward from the edge on `sgn` (+1 = +normal) at sample `i`, lifted. */

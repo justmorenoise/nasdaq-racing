@@ -3,7 +3,7 @@ import type { PriceUpdate } from "../feed/PriceFeed";
 import { getStockDef } from "../data/nasdaq100";
 import type { Track, TrackPose } from "../track/Track";
 import { Car } from "./Car";
-import { updateLanes } from "./overtake";
+import { lateralOf, updateLanes } from "./overtake";
 
 export interface CarPose extends TrackPose {
   car: Car;
@@ -51,7 +51,6 @@ export class RaceModel {
       // Stagger a starting grid just behind the start/finish line; alternate sides.
       const gridGap = this.track.def.width * 0.85;
       car.progress = this.track.startDist - i * gridGap;
-      car.lane = car.targetLane = i % 2 === 0 ? -0.4 : 0.4;
       this.cars.set(sym, car);
     });
     this.recomputeOrder();
@@ -117,7 +116,6 @@ export class RaceModel {
   }
 
   update(dt: number): void {
-    const easeLane = 1 - Math.exp(-CONFIG.laneEaseRate * dt);
     const L = this.track.length;
     const { baseGapFrac, gapPerPctFrac, gain, minMul, maxMul } = CONFIG.pace;
 
@@ -170,14 +168,70 @@ export class RaceModel {
     }
 
     this.recomputeOrder();
+    updateLanes(this.order, this.track, dt);
+    this.separate();
+    this.recomputeOrder();
     this.countOvertakes();
-    updateLanes(this.order, this.track);
-
-    for (const car of this.cars.values()) {
-      car.lane += (car.targetLane - car.lane) * easeLane;
-    }
-
     this.detectContacts();
+  }
+
+  /**
+   * Keep cars from overlapping, using their real footprints (oriented boxes
+   * on the line each is driving). Close pairs anywhere on the lap (lapped cars
+   * included) that intersect are eased apart sideways within the track edges;
+   * when there's no room left for that, the car behind yields and tucks in
+   * behind instead of driving through the one ahead.
+   */
+  private separate(): void {
+    const t = this.track;
+    const L = t.length;
+    const hl = (t.carLength * 1.04) / 2;
+    const hw = (t.carWidth * 1.08) / 2;
+    const cars = [...this.cars.values()].filter((c) => c.seeded);
+    const pos = (c: Car) => t.wrap(c.progress);
+    cars.sort((a, b) => pos(b) - pos(a));
+    const n = cars.length;
+    const overlap = (a: Car, b: Car): boolean => {
+      const pa = this.poseForCar(a);
+      const pb = this.poseForCar(b);
+      const axes = [pa.tangent, pa.tangent + Math.PI / 2, pb.tangent, pb.tangent + Math.PI / 2];
+      const dx = pb.x - pa.x;
+      const dy = pb.y - pa.y;
+      for (const ang of axes) {
+        const ax = Math.cos(ang);
+        const ay = Math.sin(ang);
+        const proj = (tan: number) => hl * Math.abs(Math.cos(tan - ang)) + hw * Math.abs(Math.sin(tan - ang));
+        if (Math.abs(dx * ax + dy * ay) > proj(pa.tangent) + proj(pb.tangent)) return false;
+      }
+      return true;
+    };
+    for (let i = 0; i < n; i++) {
+      for (let k = 1; k <= 3 && k < n; k++) {
+        const a = cars[i];
+        const b = cars[(i + k) % n];
+        const gap = ((pos(a) - pos(b)) % L + L) % L; // a ahead of b
+        if (gap > t.carLength * 1.5) continue;
+        for (let it = 0; it < 8 && overlap(a, b); it++) {
+          const la = lateralOf(a, t);
+          const lb = lateralOf(b, t);
+          const dir = la !== lb ? Math.sign(la - lb) : b.passSide || 1;
+          const [loA, hiA] = t.lateralLimits(a.progress);
+          const [loB, hiB] = t.lateralLimits(b.progress);
+          const na = Math.max(loA, Math.min(hiA, la + dir * 0.9));
+          const nb = Math.max(loB, Math.min(hiB, lb - dir * 0.9));
+          if (Math.abs(na - la) + Math.abs(nb - lb) < 0.3) {
+            // Boxed in: the car behind lifts and drops back.
+            b.progress -= 1.5;
+            b.worldSpeed = Math.min(b.worldSpeed, a.worldSpeed);
+          } else {
+            a.latOff = na - t.racingAt(a.progress);
+            b.latOff = nb - t.racingAt(b.progress);
+          }
+          a.latVel *= 0.7;
+          b.latVel *= 0.7;
+        }
+      }
+    }
   }
 
   /**
@@ -189,16 +243,17 @@ export class RaceModel {
     this.contacts = [];
     const s = CONFIG.sparks;
     const L = this.track.length;
-    const maxLong = L * s.contactLongFrac;
-    const halfW = this.track.def.width / 2;
+    const maxLong = Math.min(L * s.contactLongFrac, this.track.carLength * 1.1);
+    // Wheel-to-wheel: just touching after separation, not overlapping.
+    const touch = this.track.carWidth * 1.22;
     for (let i = 0; i < this.order.length - 1; i++) {
       const a = this.order[i];
       const b = this.order[i + 1];
       if (!a.seeded || !b.seeded) continue;
       if (a.progress - b.progress > maxLong) continue;
-      const lateral = Math.abs(a.lane - b.lane) * halfW;
-      if (lateral > s.contactLatUnits) continue;
-      const latCloseness = 1 - lateral / s.contactLatUnits; // 1 = right on top
+      const lateral = Math.abs(lateralOf(a, this.track) - lateralOf(b, this.track));
+      if (lateral > touch) continue;
+      const latCloseness = 1 - Math.max(0, lateral - this.track.carWidth) / (touch - this.track.carWidth); // 1 = touching
       const speedFactor = Math.min(1, Math.abs(a.worldSpeed - b.worldSpeed) / s.fullClosingSpeed);
       const intensity = Math.min(1, (0.35 + 0.65 * speedFactor) * latCloseness);
       if (intensity < s.minIntensity) continue;
@@ -249,15 +304,36 @@ export class RaceModel {
     return best && best.overtakes > 0 ? best : null;
   }
 
-  /** World pose for a car including its lateral lane offset. */
+  /**
+   * World pose for a car on its own line (racing line + its offset), heading
+   * along the path it is actually driving: the curve of that line plus the
+   * sideways drift of a line change, so the nose points where the car goes.
+   */
   poseForCar(car: Car): CarPose {
-    const pose = this.track.poseAt(car.progress);
-    const off = (car.lane * this.track.def.width) / 2;
+    const t = this.track;
+    const pose = t.poseAt(car.progress);
+    const lat = (d: number) => {
+      const [lo, hi] = t.lateralLimits(d);
+      return Math.max(lo, Math.min(hi, t.racingAt(d) + car.latOff));
+    };
+    const off = lat(car.progress);
+    const h = 6;
+    const p0 = t.poseAt(car.progress - h);
+    const p1 = t.poseAt(car.progress + h);
+    const o0 = lat(car.progress - h);
+    const o1 = lat(car.progress + h);
+    let dx = p1.x + p1.nx * o1 - (p0.x + p0.nx * o0);
+    let dy = p1.y + p1.ny * o1 - (p0.y + p0.ny * o0);
+    const L = Math.hypot(dx, dy) || 1;
+    // Sideways velocity from a line change, relative to the forward speed.
+    const drift = car.latVel / Math.max(20, car.worldSpeed);
+    dx = dx / L + pose.nx * drift;
+    dy = dy / L + pose.ny * drift;
     return {
       car,
       x: pose.x + pose.nx * off,
       y: pose.y + pose.ny * off,
-      tangent: pose.tangent,
+      tangent: Math.atan2(dy, dx),
       nx: pose.nx,
       ny: pose.ny,
       h: pose.h,
