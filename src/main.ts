@@ -4,8 +4,8 @@ import { buildTrack, TRACKS, resolveTrackParam, trackParamFor } from "./track/tr
 import { computeLayout } from "./track/corners";
 import { Stage } from "./render3d/Stage";
 import { TrackMesh } from "./render3d/TrackMesh";
-import { loadGrassBackground } from "./render3d/textures";
 import { Scenery3D } from "./render3d/Scenery3D";
+import { Environment3D } from "./render3d/Environment3D";
 import { CarView3D } from "./render3d/CarView3D";
 import { loadCarModel } from "./render3d/CarModel";
 import { SkidMarks3D } from "./render3d/SkidMarks3D";
@@ -74,11 +74,12 @@ async function boot() {
   // back to the default top 20 when there's no saved or shared selection.
   const initialSymbols = loadGridSelection(params) ?? [...DEFAULT_SYMBOLS];
 
-  const [track] = await Promise.all([buildTrack(trackId), loadGrassBackground(), loadCarModel()]);
+  const [track] = await Promise.all([buildTrack(trackId), loadCarModel()]);
   const layout = computeLayout(track);
   stage.scene.add(new TrackMesh(track, layout).group);
   const scenery = new Scenery3D(track, layout);
   stage.scene.add(scenery.group);
+  stage.scene.add(new Environment3D(track, scenery.blockers).group);
 
   // Rubber marks accumulate under the cars at hard-braking corners.
   const skid = new SkidMarks3D(track);

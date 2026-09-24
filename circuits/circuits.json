@@ -6,6 +6,7 @@
     "lunghezza_metri": 5793,
     "file": "monza-7b.svg",
     "verso": "cw",
+    "tema": "bosco",
     "distribuzione_marce": {
       "1": 0.0,
       "2": 3.0,
@@ -55,6 +56,7 @@
     "lunghezza_metri": 3337,
     "file": "monaco-6b.svg",
     "verso": "cw",
+    "tema": "porto",
     "scale": 0.6,
     "distribuzione_marce": {
       "1": 5.0,
@@ -222,6 +224,7 @@
     "lunghezza_metri": 7004,
     "file": "spa-francorchamps-4b.svg",
     "verso": "cw",
+    "tema": "bosco",
     "distribuzione_marce": {
       "1": 0.0,
       "2": 5.0,
@@ -331,6 +334,7 @@
     "lunghezza_metri": 4309,
     "file": "interlagos-2b.svg",
     "verso": "ccw",
+    "tema": "citta",
     "distribuzione_marce": {
       "1": 0.0,
       "2": 10.0,

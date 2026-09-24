@@ -33,6 +33,9 @@ export class Scenery3D {
   readonly group = new Group();
   /** Arc-length positions of the placed grandstands, for crowd-cheer audio. */
   readonly grandstandDists: number[] = [];
+  /** Circular footprints of everything built here, so the environment's
+   *  trees/buildings keep clear of them. */
+  readonly blockers: { x: number; y: number; r: number }[] = [];
   private cx: number;
   private cy: number;
   private pitWindow: Set<number> = new Set();
@@ -55,6 +58,7 @@ export class Scenery3D {
     this.grandstands();
     this.pitPaddock();
     this.cranes();
+    this.adBoards();
 
     this.group.add(this.solids.build());
     if (this.crowd.length) this.group.add(this.crowdMesh());
@@ -147,6 +151,8 @@ export class Scenery3D {
       }
 
       this.grandstandDists.push(p.dist);
+      const mid = this.edgeOffset(i, out, sc.standGap + seatDepth / 2);
+      this.blockers.push({ x: mid.x, y: mid.y, r: halfLen + seatDepth });
       this.buildStand((d) => this.edgeOffset(i, out, d), ax, ay, halfLen, seatDepth, roofDepth);
       return true;
     };
@@ -302,11 +308,41 @@ export class Scenery3D {
       // Boom: rises from the cab and reaches back over the run-off.
       g.box(p.x + nx * armC, p.y + ny * armC, nx, ny, armLen / 2, 2.2, 22, 25.5, CRANE, 0xf7c64a);
       g.box(bx, by, ax, ay, 2.2, 2.2, 11, 25.5, CRANE);
+      this.blockers.push({ x: bx, y: by, r: 30 });
       const hookC = baseC - armLen;
       const hx = p.x + nx * hookC;
       const hy = p.y + ny * hookC;
       g.box(hx, hy, ax, ay, 0.35, 0.35, 10, 22, 0x20242e);
       g.box(hx, hy, ax, ay, 1.6, 1.6, 7.5, 10, 0x20242e);
+    }
+  }
+
+  /**
+   * Low concrete walls topped with sponsor boards lining both sides of every
+   * straight, just past the track-limit lines (skipped along the pit entry side
+   * and where the track passes close to itself).
+   */
+  private adBoards(): void {
+    const g = this.solids;
+    const s = this.track.samples;
+    const off = 15;
+    for (const straight of this.layout.straights) {
+      const idx = straight.indices;
+      for (const side of [1, -1]) {
+        let color = AD[(Math.random() * AD.length) | 0];
+        for (let k = 1; k < idx.length; k++) {
+          const i0 = idx[k - 1];
+          const i1 = idx[k];
+          if (this.track.nearSelf[i0] || this.track.nearSelf[i1]) continue;
+          if (side === this.pitSide && (this.pitWindow.has(i0) || this.pitWindow.has(i1))) continue;
+          const a = this.edgeOffset(i0, side, off);
+          const b = this.edgeOffset(i1, side, off);
+          if (Math.hypot(b.x - a.x, b.y - a.y) > Math.hypot(s[i1].x - s[i0].x, s[i1].y - s[i0].y) * 3 + 1) continue;
+          if (this.track.onAsphalt(a.x, a.y) || this.track.onAsphalt(b.x, b.y)) continue;
+          if (k % 6 === 0) color = AD[(Math.random() * AD.length) | 0];
+          g.prism([a, b, this.edgeOffset(i1, side, off + 1.2), this.edgeOffset(i0, side, off + 1.2)], 0, 4, color, 0xd5d8dd);
+        }
+      }
     }
   }
 
@@ -410,6 +446,8 @@ export class Scenery3D {
       }
     }
     if (!tier) return;
+    const pm = this.edgeOffset(sub[sub.length >> 1], inSign, tier.depth / 2);
+    this.blockers.push({ x: pm.x, y: pm.y, r: sc.pitLaneLen / 2 + tier.depth });
 
     const band = (inner: number, outer: number, y0: number, y1: number, side: number, top = side) => {
       for (let k = 1; k < sub.length; k++) {

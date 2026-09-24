@@ -4,9 +4,7 @@ import {
   RepeatWrapping,
   SRGBColorSpace,
   Texture,
-  TextureLoader,
 } from "three";
-import bgUrl from "../../circuits/bg.jpg?url";
 
 /**
  * Procedural, seamlessly-tiling surface textures (asphalt, grass, gravel),
@@ -88,15 +86,4 @@ export function gravelTexture(): Texture {
     { count: 280, r: [0.6, 1.5], color: "#e6d2a2", alpha: 0.45 },
     { count: 90, r: [0.5, 1.1], color: "#a88f5c", alpha: 0.4 },
   ]);
-}
-
-let grassBg: Texture | null = null;
-
-/** Preload the hand-made grass tone map (`bg.jpg`); call once during boot. */
-export async function loadGrassBackground(): Promise<void> {
-  grassBg = tiled(await new TextureLoader().loadAsync(bgUrl));
-}
-
-export function grassBackgroundTexture(): Texture | null {
-  return grassBg;
 }

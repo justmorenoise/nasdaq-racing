@@ -2,6 +2,8 @@ import { computeSpeedProfile } from "./speedProfile";
 import { telemetrySectors, type TelemetryPoint, type TelemetrySector } from "./telemetry";
 import { catmullRomPolyline, type Pt } from "./centerline";
 
+export type TrackTheme = "parco" | "bosco" | "citta" | "porto";
+
 export interface TrackDef {
   id: string;
   name: string;
@@ -26,6 +28,8 @@ export interface TrackDef {
   startWorld?: Pt;
   /** Travel direction: clockwise or counter-clockwise (as seen on screen). */
   verso?: "cw" | "ccw";
+  /** Scenery theme for the 3D surroundings (render-only). */
+  theme?: TrackTheme;
   /** Gear-usage distribution (gears 1..8): the % of the lap spent in each gear,
    *  used to derive the gearbox shift points for this circuit. From
    *  `distribuzione_marce` in circuits.json; defaults applied if absent. */
