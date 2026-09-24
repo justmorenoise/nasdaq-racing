@@ -1,44 +1,70 @@
 import {
-  ACESFilmicToneMapping,
+  AgXToneMapping,
   Color,
   DirectionalLight,
   Fog,
+  HalfFloatType,
   HemisphereLight,
   PCFSoftShadowMap,
   PerspectiveCamera,
   Scene,
   SRGBColorSpace,
+  Vector2,
   Vector3,
   WebGLRenderer,
+  WebGLRenderTarget,
 } from "three";
 import { CSS2DRenderer } from "three/examples/jsm/renderers/CSS2DRenderer.js";
+import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
+import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
+import { GTAOPass } from "three/examples/jsm/postprocessing/GTAOPass.js";
+import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
+import { ShaderPass } from "three/examples/jsm/postprocessing/ShaderPass.js";
 
-const SKY = 0xc9dde6;
-/** Direction the sunlight comes from (normalised below): high, from the south-west. */
-const SUN_DIR = new Vector3(-0.45, 1, 0.55).normalize();
+const SKY = 0xcfdde3;
+/** Where the sunlight comes from: a warm late-afternoon sun, low for long shadows. */
+const SUN_DIR = new Vector3(-0.62, 0.66, 0.42).normalize();
+
+/** Final grade: pull saturation down and warm the mids, like the reference renders. */
+const GradeShader = {
+  uniforms: { tDiffuse: { value: null }, saturation: { value: 0.84 }, warmth: { value: 0.035 } },
+  vertexShader: `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+  fragmentShader: `
+    uniform sampler2D tDiffuse; uniform float saturation; uniform float warmth; varying vec2 vUv;
+    void main() {
+      vec4 c = texture2D(tDiffuse, vUv);
+      float l = dot(c.rgb, vec3(0.2126, 0.7152, 0.0722));
+      vec3 g = mix(vec3(l), c.rgb, saturation);
+      g += vec3(warmth, warmth * 0.4, -warmth) * (1.0 - abs(l - 0.5) * 2.0);
+      gl_FragColor = vec4(g, c.a);
+    }`,
+};
 
 /**
- * Renderer, scene, camera and lighting. A warm key light casts soft shadows
- * through a shadow frustum that follows whatever the camera is looking at
- * (`focusShadows`), so shadows stay crisp in a close chase and still cover the
- * whole circuit in the full view. Car labels render as DOM via CSS2DRenderer
- * stacked right above the canvas.
+ * Renderer, scene, camera, lighting and post-processing. A warm low sun casts
+ * soft shadows through a frustum that follows the camera focus; a sky/ground
+ * hemisphere fills; ground-truth ambient occlusion (GTAO) grounds every object
+ * like the reference dioramas, then AgX tone mapping and a gentle desaturating
+ * grade. AO is dropped on small/mobile views. Car labels are CSS2D DOM.
  */
 export class Stage {
   readonly renderer: WebGLRenderer;
   readonly labels = new CSS2DRenderer();
   readonly scene = new Scene();
   readonly camera = new PerspectiveCamera(40, 1, 5, 60000);
-  readonly sun = new DirectionalLight(0xfff1dc, 2.4);
+  readonly sun = new DirectionalLight(0xffe4c4, 3.1);
+  private composer: EffectComposer;
+  private ao: GTAOPass;
+  private aoOn = true;
   width = 1;
   height = 1;
 
   constructor(private host: HTMLElement) {
     this.renderer = new WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.75));
     this.renderer.outputColorSpace = SRGBColorSpace;
-    this.renderer.toneMapping = ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.05;
+    this.renderer.toneMapping = AgXToneMapping;
+    this.renderer.toneMappingExposure = 1.15;
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = PCFSoftShadowMap;
     host.appendChild(this.renderer.domElement);
@@ -49,12 +75,25 @@ export class Stage {
     this.scene.background = new Color(SKY);
     this.scene.fog = new Fog(SKY, 4000, 20000);
 
-    this.scene.add(new HemisphereLight(0xdcefff, 0x5c7a3a, 1.35));
+    this.scene.add(new HemisphereLight(0xd9e8f2, 0x8d7c5c, 1.25));
     this.sun.castShadow = true;
     this.sun.shadow.mapSize.set(4096, 4096);
-    this.sun.shadow.bias = -0.0004;
-    this.sun.shadow.normalBias = 0.6;
+    this.sun.shadow.bias = -0.0003;
+    this.sun.shadow.normalBias = 0.8;
+    this.sun.shadow.radius = 3;
     this.scene.add(this.sun, this.sun.target);
+
+    const size = this.renderer.getDrawingBufferSize(new Vector2());
+    const target = new WebGLRenderTarget(size.x, size.y, { type: HalfFloatType, samples: 4 });
+    this.composer = new EffectComposer(this.renderer, target);
+    this.composer.addPass(new RenderPass(this.scene, this.camera));
+    this.ao = new GTAOPass(this.scene, this.camera, size.x, size.y);
+    this.ao.blendIntensity = 0.85;
+    this.ao.updateGtaoMaterial({ radius: 6, distanceExponent: 1.4, thickness: 3, scale: 1.2, samples: 12 });
+    this.ao.updatePdMaterial({ lumaPhi: 10, depthPhi: 2, normalPhi: 3, radius: 6, rings: 2, samples: 12 });
+    this.composer.addPass(this.ao);
+    this.composer.addPass(new OutputPass());
+    this.composer.addPass(new ShaderPass(GradeShader));
 
     this.resize();
   }
@@ -63,9 +102,14 @@ export class Stage {
     this.width = Math.max(1, this.host.clientWidth);
     this.height = Math.max(1, this.host.clientHeight);
     this.renderer.setSize(this.width, this.height);
+    this.composer.setPixelRatio(this.renderer.getPixelRatio());
+    this.composer.setSize(this.width, this.height);
     this.labels.setSize(this.width, this.height);
     this.camera.aspect = this.width / this.height;
     this.camera.updateProjectionMatrix();
+    // AO is the costly pass: only on roomy views.
+    this.aoOn = this.width * this.height > 500 * 400 && this.width >= 640;
+    this.ao.enabled = this.aoOn;
   }
 
   setShadows(on: boolean): void {
@@ -77,27 +121,28 @@ export class Stage {
     });
   }
 
-  /** Centre the shadow frustum on (x, z), covering a square of half-size `radius`. */
-  focusShadows(x: number, z: number, radius: number): void {
+  /** Centre the shadow frustum on (x, h, z), covering a square of half-size `radius`. */
+  focusShadows(x: number, h: number, z: number, radius: number): void {
     const cam = this.sun.shadow.camera;
-    const r = Math.max(200, radius);
-    this.sun.target.position.set(x, 0, z);
-    this.sun.position.set(x + SUN_DIR.x * r * 3, SUN_DIR.y * r * 3, z + SUN_DIR.z * r * 3);
+    const r = Math.max(220, radius);
+    this.sun.target.position.set(x, h, z);
+    this.sun.position.set(x + SUN_DIR.x * r * 3, h + SUN_DIR.y * r * 3, z + SUN_DIR.z * r * 3);
     cam.left = -r;
     cam.right = r;
     cam.top = r;
     cam.bottom = -r;
     cam.near = r * 0.5;
-    cam.far = r * 6;
+    cam.far = r * 7;
     cam.updateProjectionMatrix();
-    // Distance haze scales with the framing so the far field fades in every view.
     const fog = this.scene.fog as Fog;
-    fog.near = r * 2.5;
-    fog.far = r * 9;
+    fog.near = r * 2.6;
+    fog.far = r * 10;
+    // AO sampling radius follows the framing (world units).
+    this.ao.updateGtaoMaterial({ radius: Math.max(4, r * 0.02) });
   }
 
   render(): void {
-    this.renderer.render(this.scene, this.camera);
+    this.composer.render();
     this.labels.render(this.scene, this.camera);
   }
 }

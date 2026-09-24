@@ -6,6 +6,9 @@ import { Stage } from "./render3d/Stage";
 import { TrackMesh } from "./render3d/TrackMesh";
 import { Scenery3D } from "./render3d/Scenery3D";
 import { Environment3D } from "./render3d/Environment3D";
+import { Terrain } from "./render3d/Terrain";
+import { Occupancy } from "./render3d/Occupancy";
+import { loadKit } from "./render3d/Kit";
 import { CarView3D } from "./render3d/CarView3D";
 import { loadCarModel } from "./render3d/CarModel";
 import { SkidMarks3D } from "./render3d/SkidMarks3D";
@@ -74,12 +77,15 @@ async function boot() {
   // back to the default top 20 when there's no saved or shared selection.
   const initialSymbols = loadGridSelection(params) ?? [...DEFAULT_SYMBOLS];
 
-  const [track] = await Promise.all([buildTrack(trackId), loadCarModel()]);
+  const [track] = await Promise.all([buildTrack(trackId), loadCarModel(), loadKit()]);
   const layout = computeLayout(track);
-  stage.scene.add(new TrackMesh(track, layout).group);
-  const scenery = new Scenery3D(track, layout);
+  const terrain = new Terrain(track);
+  stage.scene.add(terrain.mesh, terrain.skirt);
+  stage.scene.add(new TrackMesh(track, layout, terrain).group);
+  const occupancy = new Occupancy();
+  const scenery = new Scenery3D(track, layout, terrain, occupancy);
   stage.scene.add(scenery.group);
-  stage.scene.add(new Environment3D(track, scenery.blockers).group);
+  stage.scene.add(new Environment3D(track, terrain, occupancy).group);
 
   // Rubber marks accumulate under the cars at hard-braking corners.
   const skid = new SkidMarks3D(track);
@@ -88,7 +94,7 @@ async function boot() {
   stage.scene.add(sparks.lines);
 
   const model = new RaceModel(track, initialSymbols);
-  const camera = new Camera3D(stage.camera, track, layout, model, stage);
+  const camera = new Camera3D(stage.camera, track, layout, model, stage, (x, y) => terrain.heightAt(x, y));
 
   let directorOn = false;
   // Picking a car (on track or in the standings) is the user taking manual
@@ -105,7 +111,7 @@ async function boot() {
   const syncCarViews = () => {
     for (const [sym, car] of model.cars) {
       if (carViews.has(sym)) continue;
-      const view = new CarView3D(car, track.def.scale ?? 1, followManually);
+      const view = new CarView3D(car, track, track.def.scale ?? 1, followManually);
       carViews.set(sym, view);
       stage.scene.add(view.root);
     }
@@ -331,7 +337,7 @@ async function boot() {
     camera.update(dt);
     // Shadows only where the camera looks; off on the tiny mobile thumbnail.
     stage.setShadows(!stageCollapsed);
-    stage.focusShadows(camera.focus.x, camera.focus.z, camera.focusRadius);
+    stage.focusShadows(camera.focus.x, camera.focus.y, camera.focus.z, camera.focusRadius);
     // P1 = best performer by % (top of the standings).
     let leaderSym: string | undefined;
     let bestPct = -Infinity;
@@ -444,6 +450,7 @@ async function boot() {
     camera,
     track,
     scenery,
+    terrain,
     stage,
     audio,
     frame,

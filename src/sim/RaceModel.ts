@@ -260,6 +260,7 @@ export class RaceModel {
       tangent: pose.tangent,
       nx: pose.nx,
       ny: pose.ny,
+      h: pose.h,
     };
   }
 }

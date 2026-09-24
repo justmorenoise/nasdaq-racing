@@ -5,71 +5,102 @@ import {
   InstancedMesh,
   Matrix4,
   MeshLambertMaterial,
+  Vector3,
 } from "three";
 import { CONFIG } from "../config";
-import type { Track, TrackSample } from "../track/Track";
+import type { Track } from "../track/Track";
 import type { Pt } from "../track/centerline";
-import { offsetPoint, type TrackLayout } from "../track/corners";
+import type { TrackLayout } from "../track/corners";
+import { KitInstancer, PROP_SCALE } from "./Kit";
+import type { Occupancy } from "./Occupancy";
+import { outwardSign, pitInfo } from "./pitInfo";
 import { Solids } from "./Solids";
+import type { Terrain } from "./Terrain";
+import { hashString, mulberry32 } from "./Terrain";
 
-const CROWD = [0xe6e6e6, 0xff5a5f, 0xffd23f, 0x4f9dff, 0x5ad19a, 0xff8c42, 0xc779ff, 0xff4d6d, 0x2f3542];
-const TEAM = [0xd8342c, 0x1e5bc6, 0x0f8f6d, 0xff8a00, 0x14141a, 0xf0c419, 0x5a2ca0, 0xe6e6e6];
-const AD = [0xd8342c, 0xf0c419, 0x1e5bc6, 0xffffff, 0x14141a, 0x0f8f6d];
-
-const CONCRETE = 0xb4b9c1;
-const CONCRETE_TOP = 0xcbd0d6;
-const ROOF = 0xeef0f2;
-const STEEL = 0x8a929c;
-const CRANE = 0xf4b41a;
+const CROWD = [0xe8e4da, 0xd8553f, 0xe9b532, 0x4e7fc4, 0x5aa97b, 0xe0873e, 0x9a6fc0, 0xd9546d, 0x3a3f48, 0xf1efe8];
+const TEAM = [0xc8412f, 0x1f4fa8, 0x137a64, 0xe8862a, 0x23262b, 0xe6b422, 0x5a3a9a, 0x9aa3ab, 0x2f7a4f, 0xd9546d];
+const SEAT = [0x3f6cb3, 0xc8412f, 0xe6b422, 0x2f7a4f];
+const CONCRETE = 0xc9c6be;
+const CONCRETE_TOP = 0xd9d6cf;
+const ROOF = 0xeeece6;
+const STEEL = 0x8e969e;
 
 /**
- * Static trackside surroundings in 3D, all derived from the track geometry and
- * built once: tiered grandstands packed with spectators along the straights, a
- * pit lane with pit wall, garages and a paddock of team trucks at the
- * start/finish, and recovery cranes at the sharpest corners. Placement rules are
- * the same as the former 2D scenery: everything stays strictly off the asphalt.
+ * Trackside scenery in 3D, standing on the real track/terrain heights and all
+ * kept off the asphalt: detailed grandstands (tiers, seat blocks, aisles,
+ * spectators, roof on columns, flags), the pit complex (pit wall, garages with
+ * team doors, a glazed pit building, paddock with trucks, motorhomes, tents
+ * and people), recovery telehandlers at the sharpest corners, marshal posts
+ * and TV towers around the lap, gantries over the straights, billboards and
+ * a spectator car park. Kit assets are instanced; structures are merged solids.
  */
 export class Scenery3D {
   readonly group = new Group();
-  /** Arc-length positions of the placed grandstands, for crowd-cheer audio. */
   readonly grandstandDists: number[] = [];
-  /** Circular footprints of everything built here, so the environment's
-   *  trees/buildings keep clear of them. */
-  readonly blockers: { x: number; y: number; r: number }[] = [];
-  private cx: number;
-  private cy: number;
-  private pitWindow: Set<number> = new Set();
-  private pitSide = 0;
   private solids = new Solids();
+  private kit = new KitInstancer();
   private crowd: { x: number; y: number; h: number; c: number }[] = [];
+  private pit: { window: Set<number>; side: number };
+  private rand: () => number;
+  private half: number;
 
   constructor(
     private track: Track,
     private layout: TrackLayout,
+    private terrain: Terrain,
+    private occ: Occupancy,
   ) {
-    const b = track.bounds;
-    this.cx = (b.minX + b.maxX) / 2;
-    this.cy = (b.minY + b.maxY) / 2;
+    this.rand = mulberry32(hashString(track.def.id + ":scenery"));
+    this.pit = pitInfo(track);
+    this.half = track.def.width / 2;
+    this.reserveTrack();
 
-    const pw = this.windowAround(this.track.startDist, CONFIG.scenery.pitLaneLen / 2);
-    this.pitWindow = new Set(pw);
-    this.pitSide = pw.length >= 3 ? -this.outwardSign(this.track.samples[pw[Math.floor(pw.length / 2)]]) : 0;
-
+    this.pitComplex();
     this.grandstands();
-    this.pitPaddock();
-    this.cranes();
-    this.adBoards();
+    this.telehandlers();
+    this.marshalPosts();
+    this.gantries();
+    this.billboards();
 
     this.group.add(this.solids.build());
+    this.group.add(this.kit.build());
     if (this.crowd.length) this.group.add(this.crowdMesh());
   }
 
-  private get half(): number {
-    return this.track.def.width / 2;
+  /** Block the asphalt + run-off corridor for everything placed afterwards. */
+  private reserveTrack(): void {
+    const s = this.track.samples;
+    const r = this.half + 30;
+    for (let i = 0; i < s.length; i += 3) this.occ.add(s[i].x, s[i].y, r);
   }
 
-  private outwardSign(s: TrackSample): number {
-    return (s.x - this.cx) * s.nx + (s.y - this.cy) * s.ny >= 0 ? 1 : -1;
+  private pick<T>(a: T[]): T {
+    return a[Math.floor(this.rand() * a.length)];
+  }
+
+  /** A point `d` outside the real track edge on `side` at sample `i`, with the track height. */
+  private edgeOffset(i: number, side: number, d: number): Pt & { h: number } {
+    const s = this.track.samples[i];
+    const edge = this.track.edgeLeft;
+    let w = this.half;
+    if (edge) {
+      const e = side >= 0 ? edge[i] : this.track.edgeRight![i];
+      w = Math.max(this.half * 0.55, Math.min(this.half * 1.6, Math.hypot(e.x - s.x, e.y - s.y)));
+    }
+    const k = w + d;
+    return { x: s.x + s.nx * side * k, y: s.y + s.ny * side * k, h: s.h };
+  }
+
+  private ground(x: number, y: number): number {
+    return this.terrain.heightAt(x, y);
+  }
+
+  private runLength(indices: number[]): number {
+    const s = this.track.samples;
+    let len = 0;
+    for (let j = 1; j < indices.length; j++) len += Math.hypot(s[indices[j]].x - s[indices[j - 1]].x, s[indices[j]].y - s[indices[j - 1]].y);
+    return len;
   }
 
   private spaced(indices: number[], spacing: number, margin: number): number[] {
@@ -77,198 +108,172 @@ export class Scenery3D {
     const total = this.runLength(indices);
     const picks: number[] = [];
     let traveled = 0;
-    let sinceLast = Infinity;
+    let since = Infinity;
     for (let j = 0; j < indices.length; j++) {
       if (j > 0) {
-        const a = s[indices[j - 1]];
-        const b = s[indices[j]];
-        const d = Math.hypot(b.x - a.x, b.y - a.y);
+        const d = Math.hypot(s[indices[j]].x - s[indices[j - 1]].x, s[indices[j]].y - s[indices[j - 1]].y);
         traveled += d;
-        sinceLast += d;
+        since += d;
       }
-      if (traveled >= margin && total - traveled >= margin && sinceLast >= spacing) {
+      if (traveled >= margin && total - traveled >= margin && since >= spacing) {
         picks.push(indices[j]);
-        sinceLast = 0;
+        since = 0;
       }
     }
     return picks;
   }
 
-  private runLength(indices: number[]): number {
-    const s = this.track.samples;
-    let len = 0;
-    for (let j = 1; j < indices.length; j++) {
-      len += Math.hypot(s[indices[j]].x - s[indices[j - 1]].x, s[indices[j]].y - s[indices[j - 1]].y);
-    }
-    return len;
-  }
-
-  /** A point `d` outside the track edge on `side` at centerline sample `i`. */
-  private edgeOffset(i: number, side: number, d: number): Pt {
-    const s = this.track.samples[i];
-    const edge = this.track.edgeLeft;
-    if (edge) {
-      const e = side >= 0 ? edge[i] : this.track.edgeRight![i];
-      const dx = e.x - s.x;
-      const dy = e.y - s.y;
-      const len = Math.hypot(dx, dy) || 1;
-      return { x: e.x + (dx / len) * d, y: e.y + (dy / len) * d };
-    }
-    return offsetPoint(s, side * (this.half + d));
-  }
-
+  // ------------------------------------------------------------------ stands
   private grandstands(): void {
     const sc = CONFIG.scenery;
     const s = this.track.samples;
-    const seatDepth = sc.standDepth * 0.62;
-    const roofDepth = sc.standDepth * 0.18;
-    const footprint = sc.standGap + seatDepth + roofDepth + 12;
+    const depth = sc.standDepth * 0.9;
 
     const place = (i: number, minGap = 0, lenFactor = 1): boolean => {
       const p = s[i];
-      const out = this.outwardSign(p);
-      if (this.pitWindow.has(i) && out === this.pitSide) return false;
+      const out = outwardSign(this.track, p);
+      if (this.pit.window.has(i) && out === this.pit.side) return false;
+      if (this.track.nearSelf[i]) return false;
       if (minGap > 0) {
         for (const d of this.grandstandDists) {
           const dd = Math.abs(p.dist - d);
           if (Math.min(dd, this.track.length - dd) < minGap) return false;
         }
       }
-      const nx = p.nx * out;
-      const ny = p.ny * out;
-      const e0 = this.edgeOffset(i, out, 0);
-      if (this.track.edgeRayDistance(e0.x, e0.y, nx, ny) < footprint) return false;
-
       const ax = Math.cos(p.tangent);
       const ay = Math.sin(p.tangent);
-      const halfLen = sc.standSegLen * (0.4 + Math.random() * 0.08) * lenFactor;
-      const alongHalf = halfLen + 5;
-      for (const depth of [sc.standGap - 5, sc.standGap + seatDepth + roofDepth]) {
-        const c = this.edgeOffset(i, out, depth);
-        for (const sgn of [1, -1]) {
-          if (this.track.onAsphalt(c.x + ax * alongHalf * sgn, c.y + ay * alongHalf * sgn)) return false;
-        }
-      }
-
+      const halfLen = sc.standSegLen * (0.42 + this.rand() * 0.1) * lenFactor;
+      const mid = this.edgeOffset(i, out, sc.standGap + depth / 2);
+      const r = depth / 2;
+      // The footprint as a row of circles along the stand (it's long and thin).
+      const dots: Pt[] = [];
+      for (let u = -halfLen; u <= halfLen + 0.1; u += r) dots.push({ x: mid.x + ax * u, y: mid.y + ay * u });
+      if (dots.some((d) => !this.occ.free(d.x, d.y, r * 0.95))) return false;
+      if (dots.some((d) => this.terrain.trackDistance(d.x, d.y) < this.half + sc.standGap)) return false;
+      if (this.track.edgeRayDistance(mid.x, mid.y, p.nx * out, p.ny * out) < depth) return false;
+      for (const d of dots) this.occ.add(d.x, d.y, r);
       this.grandstandDists.push(p.dist);
-      const mid = this.edgeOffset(i, out, sc.standGap + seatDepth / 2);
-      this.blockers.push({ x: mid.x, y: mid.y, r: halfLen + seatDepth });
-      this.buildStand((d) => this.edgeOffset(i, out, d), ax, ay, halfLen, seatDepth, roofDepth);
+      this.buildStand((d) => this.edgeOffset(i, out, d), ax, ay, halfLen, depth, p.h);
       return true;
     };
 
     for (const straight of this.layout.straights) {
       if (this.runLength(straight.indices) < sc.standMinStraightFrac * this.track.length) continue;
-      for (const i of this.spaced(straight.indices, sc.standSegLen, sc.standSegLen * 0.3)) place(i);
+      for (const i of this.spaced(straight.indices, sc.standSegLen * 1.05, sc.standSegLen * 0.3)) place(i);
     }
-
-    // Sparse circuits: spread extra stands around the lap (farthest-point
-    // insertion, biased to straighter spots) until the minimum is met.
+    // Corner-exit stands overlooking the braking zones (like the refs' hairpin stands).
+    for (const run of this.layout.runs) {
+      const i = run.indices[Math.min(run.indices.length - 1, run.apexEnd + 2)];
+      if (i !== undefined) place(i, sc.standSegLen * 0.9, 0.7);
+    }
     const L = this.track.length;
-    const candStep = Math.max(1, Math.round(s.length / 160));
-    const candidates: number[] = [];
-    for (let i = 0; i < s.length; i += candStep) candidates.push(i);
-    const gapToNearest = (i: number): number => {
-      let nearest = Infinity;
-      for (const gd of this.grandstandDists) {
-        const dd = Math.abs(s[i].dist - gd);
-        nearest = Math.min(nearest, Math.min(dd, L - dd));
+    const cand: number[] = [];
+    for (let i = 0; i < s.length - 1; i += Math.max(1, Math.round(s.length / 160))) cand.push(i);
+    const gapTo = (i: number) => {
+      let n = Infinity;
+      for (const g of this.grandstandDists) {
+        const dd = Math.abs(s[i].dist - g);
+        n = Math.min(n, Math.min(dd, L - dd));
       }
-      return nearest;
+      return n;
     };
-    const fill = (minGap: number, lenFactor: number, curvWeight: number): void => {
-      const pool = candidates.slice();
-      let guard = pool.length + 5;
-      while (this.grandstandDists.length < sc.minStands && pool.length && guard-- > 0) {
-        let bestK = -1;
-        let bestScore = -Infinity;
-        for (let k = 0; k < pool.length; k++) {
-          const gap = gapToNearest(pool[k]);
-          if (gap < minGap) continue;
-          const score = gap - curvWeight * s[pool[k]].curvature;
-          if (score > bestScore) {
-            bestScore = score;
+    const target = sc.minStands + 3;
+    for (const [gap, lf] of [[sc.standSegLen, 0.85], [sc.standSegLen * 0.6, 0.7]] as const) {
+      const pool = cand.slice();
+      while (this.grandstandDists.length < target && pool.length) {
+        let bestK = 0;
+        let best = -Infinity;
+        pool.forEach((i, k) => {
+          const sc2 = gapTo(i) - 3000 * s[i].curvature;
+          if (sc2 > best) {
+            best = sc2;
             bestK = k;
           }
-        }
-        if (bestK < 0) break;
-        const i = pool[bestK];
-        pool.splice(bestK, 1);
-        place(i, minGap, lenFactor);
+        });
+        const [i] = pool.splice(bestK, 1);
+        if (gapTo(i) >= gap) place(i, gap, lf);
       }
-    };
-    if (this.grandstandDists.length < sc.minStands) fill(sc.standSegLen, 0.85, 4000);
-    if (this.grandstandDists.length < sc.minStands) fill(sc.standSegLen * 0.6, 0.75, 1000);
-    if (this.grandstandDists.length < sc.minStands) fill(sc.standSegLen * 0.3, 0.6, 0);
+    }
   }
 
   /**
-   * One grandstand: apron, a front wall of ad boards, stepped seating tiers
-   * filled with spectators, a back wall and a cantilevered roof on posts.
-   * `at(d)` is the point `d` units outward from the track edge at the stand's
-   * centre; (ax, ay) is the along-track axis.
+   * One grandstand at `at(d)` (d outward from the track edge): apron, front
+   * wall with ad boards, stepped tiers of coloured seat blocks split by stair
+   * aisles and filled with spectators, a back wall, a roof on columns with a
+   * sponsor fascia, and flags along the top.
    */
-  private buildStand(
-    at: (d: number) => Pt,
-    ax: number,
-    ay: number,
-    halfLen: number,
-    seatDepth: number,
-    roofDepth: number,
-  ): void {
+  private buildStand(at: (d: number) => Pt & { h: number }, ax: number, ay: number, halfLen: number, depth: number, trackH: number): void {
     const sc = CONFIG.scenery;
     const g = this.solids;
-    const apron = at(sc.standGap - 5);
-    g.box(apron.x, apron.y, ax, ay, halfLen + 5, 5, 0, 0.5, 0x7b8089);
+    const front = sc.standGap;
+    const floor = trackH + 0.5;
+    // Foundation reaching down to whatever the ground does under the stand.
+    const c = at(front + depth / 2);
+    const lowest = Math.min(
+      this.ground(c.x, c.y),
+      this.ground(at(front).x, at(front).y),
+      this.ground(at(front + depth).x, at(front + depth).y),
+    );
+    const base = Math.min(floor, lowest) - 3;
+    const apron = at(front - 6);
+    g.box(apron.x, apron.y, ax, ay, halfLen + 6, 6, base, floor, 0x8d9097, 0xa8aab0);
 
-    // Front wall made of sponsor boards.
-    const wall = at(sc.standGap - 1);
-    const boards = Math.max(1, Math.round((halfLen * 2) / 22));
+    const wall = at(front - 1);
+    const boards = Math.max(2, Math.round((halfLen * 2) / 20));
     const bl = (halfLen * 2) / boards;
     for (let k = 0; k < boards; k++) {
       const u = -halfLen + bl * (k + 0.5);
-      g.box(wall.x + ax * u, wall.y + ay * u, ax, ay, bl / 2, 0.8, 0, 4.5, AD[(Math.random() * AD.length) | 0], 0xdadde2);
+      g.box(wall.x + ax * u, wall.y + ay * u, ax, ay, bl / 2 - 0.2, 0.8, floor, floor + 4.5, this.pick(TEAM), 0xdadde2);
     }
 
-    const tiers = 5;
-    const riser = seatDepth * 0.12;
-    const td = seatDepth / tiers;
-    let top = 4;
+    const tiers = 8;
+    const td = (depth * 0.82) / tiers;
+    const riser = 3.1;
+    const aisle = 44;
+    const seatCol = this.pick(SEAT);
+    let top = floor;
     for (let k = 0; k < tiers; k++) {
-      top = 4 + (k + 1) * riser;
-      const c = at(sc.standGap + td * (k + 0.5));
-      g.box(c.x, c.y, ax, ay, halfLen, td / 2, 0, top, CONCRETE, CONCRETE_TOP);
-      // Two staggered rows of spectators per tier (a few empty seats).
-      for (const row of [0.3, 0.72]) {
-        const rc = at(sc.standGap + td * (k + row));
-        for (let u = -halfLen + 2; u < halfLen - 1; u += 3.4) {
-          if (Math.random() < 0.08) continue;
-          const j = u + (Math.random() - 0.5) * 1.2;
-          this.crowd.push({
-            x: rc.x + ax * j,
-            y: rc.y + ay * j,
-            h: top,
-            c: CROWD[(Math.random() * CROWD.length) | 0],
-          });
+      top = floor + 3 + (k + 1) * riser;
+      const cc = at(front + td * (k + 0.5));
+      g.box(cc.x, cc.y, ax, ay, halfLen, td / 2, base, top - 0.6, CONCRETE, CONCRETE_TOP);
+      // Seat blocks between aisles; the aisles stay bare concrete steps.
+      for (let u = -halfLen; u < halfLen - 1; u += aisle) {
+        const u1 = Math.min(halfLen, u + aisle) - 2.5;
+        const u0 = u + 2.5;
+        if (u1 <= u0) continue;
+        const um = (u0 + u1) / 2;
+        g.box(cc.x + ax * um, cc.y + ay * um, ax, ay, (u1 - u0) / 2, td / 2 - 0.4, top - 0.6, top, seatCol);
+        for (let x = u0 + 1.2; x < u1 - 0.6; x += 3.2) {
+          if (this.rand() < 0.07) continue;
+          const j = x + (this.rand() - 0.5) * 0.9;
+          const row = at(front + td * (k + 0.5) + (this.rand() - 0.5) * td * 0.4);
+          this.crowd.push({ x: row.x + ax * j, y: row.y + ay * j, h: top, c: this.pick(CROWD) });
         }
       }
     }
+    const back = at(front + depth * 0.84);
+    g.box(back.x, back.y, ax, ay, halfLen, 1.2, base, top + 7, 0xa9adb3);
 
-    const back = at(sc.standGap + seatDepth + 1);
-    g.box(back.x, back.y, ax, ay, halfLen, 1, 0, top + 6, 0x9ea4ad);
-
-    // Roof on slim posts along the back, overhanging the upper tiers.
-    const roofY = top + 13;
-    const roof = at(sc.standGap + seatDepth * 0.35 + (seatDepth * 0.65 + roofDepth) / 2);
-    g.box(roof.x, roof.y, ax, ay, halfLen + 3, (seatDepth * 0.65 + roofDepth) / 2, roofY, roofY + 1.6, 0xb7bec7, ROOF);
-    const post = at(sc.standGap + seatDepth + 1);
-    for (let u = -halfLen; u <= halfLen + 0.1; u += Math.max(20, (halfLen * 2) / 6)) {
-      g.box(post.x + ax * u, post.y + ay * u, ax, ay, 0.8, 0.8, 0, roofY, STEEL);
+    // Roof over the upper two-thirds, on columns rising behind the stand.
+    const roofY = top + 16;
+    const rc = at(front + depth * 0.42);
+    const roofHalf = depth * 0.5;
+    g.box(rc.x, rc.y, ax, ay, halfLen + 3, roofHalf, roofY, roofY + 1.4, 0xb7bec7, ROOF);
+    const fascia = at(front + depth * 0.42 - roofHalf);
+    g.box(fascia.x, fascia.y, ax, ay, halfLen + 3, 0.6, roofY - 3.2, roofY + 1.4, this.pick(TEAM));
+    const colLine = at(front + depth * 0.86);
+    const bays = Math.max(2, Math.round((halfLen * 2) / 24));
+    for (let k = 0; k <= bays; k++) {
+      const u = -halfLen + (k * halfLen * 2) / bays;
+      g.box(colLine.x + ax * u, colLine.y + ay * u, ax, ay, 0.9, 0.9, base, roofY, STEEL);
+      // Diagonal brace down to the back wall (reads as the refs' roof trusses).
+      g.box(colLine.x + ax * u, colLine.y + ay * u, ax, ay, 0.4, 3.5, roofY - 5, roofY - 4, STEEL);
+      if (k % 2 === 0) this.kit.add("flag", colLine.x + ax * u, roofY + 1.4, colLine.y + ay * u, Math.atan2(ay, ax), 1.4, this.pick(TEAM));
     }
   }
 
   private crowdMesh(): InstancedMesh {
-    const geo = new BoxGeometry(1.7, 2.6, 1.7).translate(0, 1.3, 0);
+    const geo = new BoxGeometry(1.8, 2.8, 1.8).translate(0, 1.4, 0);
     const mesh = new InstancedMesh(geo, new MeshLambertMaterial(), this.crowd.length);
     const m = new Matrix4();
     const c = new Color();
@@ -277,168 +282,56 @@ export class Scenery3D {
       mesh.setMatrixAt(k, m);
       mesh.setColorAt(k, c.setHex(p.c));
     });
-    mesh.castShadow = false;
     mesh.receiveShadow = true;
     return mesh;
   }
 
-  /** Recovery cranes at the sharpest corners, jib reaching toward the track. */
-  private cranes(): void {
+  // -------------------------------------------------------------- pit complex
+  /**
+   * Pit lane + pit wall, a garage block with team-coloured doors and a glazed
+   * upper floor, then the paddock: team trucks, motorhomes, tents, people and
+   * lamp posts, and a spectator car park behind. Depth is capped by the free
+   * infield so it never reaches the far side of the track.
+   */
+  private pitComplex(): void {
     const sc = CONFIG.scenery;
     const s = this.track.samples;
     const g = this.solids;
-    const sharpest = [...this.layout.runs].sort((a, b) => b.peakSeverity - a.peakSeverity).slice(0, sc.craneCount);
-    for (const run of sharpest) {
-      const p = s[run.indices[Math.round((run.apexStart + run.apexEnd) / 2)]];
-      const out = -run.turnSign;
-      const nx = p.nx * out;
-      const ny = p.ny * out;
-      const ax = Math.cos(p.tangent);
-      const ay = Math.sin(p.tangent);
-      const baseC = this.half + sc.craneGap;
-      const bx = p.x + nx * baseC;
-      const by = p.y + ny * baseC;
-      g.box(bx, by, ax, ay, 12, 8, 0, 4, 0x394150); // chassis
-      for (const w of [-8, 8]) {
-        for (const d of [-7, 7]) g.box(bx + ax * w + nx * d, by + ay * w + ny * d, ax, ay, 2.4, 1.2, 0, 4.8, 0x1c1f25);
-      }
-      g.box(bx - nx * 2, by - ny * 2, ax, ay, 6, 5, 4, 11, CRANE, 0xf7c64a); // cab
-      const armLen = sc.craneGap * 0.9;
-      const armC = baseC - armLen / 2;
-      // Boom: rises from the cab and reaches back over the run-off.
-      g.box(p.x + nx * armC, p.y + ny * armC, nx, ny, armLen / 2, 2.2, 22, 25.5, CRANE, 0xf7c64a);
-      g.box(bx, by, ax, ay, 2.2, 2.2, 11, 25.5, CRANE);
-      this.blockers.push({ x: bx, y: by, r: 30 });
-      const hookC = baseC - armLen;
-      const hx = p.x + nx * hookC;
-      const hy = p.y + ny * hookC;
-      g.box(hx, hy, ax, ay, 0.35, 0.35, 10, 22, 0x20242e);
-      g.box(hx, hy, ax, ay, 1.6, 1.6, 7.5, 10, 0x20242e);
-    }
-  }
-
-  /**
-   * Low concrete walls topped with sponsor boards lining both sides of every
-   * straight, just past the track-limit lines (skipped along the pit entry side
-   * and where the track passes close to itself).
-   */
-  private adBoards(): void {
-    const g = this.solids;
-    const s = this.track.samples;
-    const off = 15;
-    for (const straight of this.layout.straights) {
-      const idx = straight.indices;
-      for (const side of [1, -1]) {
-        let color = AD[(Math.random() * AD.length) | 0];
-        for (let k = 1; k < idx.length; k++) {
-          const i0 = idx[k - 1];
-          const i1 = idx[k];
-          if (this.track.nearSelf[i0] || this.track.nearSelf[i1]) continue;
-          if (side === this.pitSide && (this.pitWindow.has(i0) || this.pitWindow.has(i1))) continue;
-          const a = this.edgeOffset(i0, side, off);
-          const b = this.edgeOffset(i1, side, off);
-          if (Math.hypot(b.x - a.x, b.y - a.y) > Math.hypot(s[i1].x - s[i0].x, s[i1].y - s[i0].y) * 3 + 1) continue;
-          if (this.track.onAsphalt(a.x, a.y) || this.track.onAsphalt(b.x, b.y)) continue;
-          if (k % 6 === 0) color = AD[(Math.random() * AD.length) | 0];
-          g.prism([a, b, this.edgeOffset(i1, side, off + 1.2), this.edgeOffset(i0, side, off + 1.2)], 0, 4, color, 0xd5d8dd);
-        }
-      }
-    }
-  }
-
-  private windowAround(centerDist: number, halfLen: number): number[] {
-    const s = this.track.samples;
-    const n = s.length - 1;
-    const L = this.track.length;
-    let mid = 0;
-    let bestD = Infinity;
-    for (let i = 0; i < n; i++) {
-      const d = Math.abs(this.track.wrap(s[i].dist - centerDist + L / 2) - L / 2);
-      if (d < bestD) {
-        bestD = d;
-        mid = i;
-      }
-    }
-    const out: number[] = [mid];
-    let back = 0;
-    for (let k = 1; k < n; k++) {
-      const i = (mid - k + n) % n;
-      const j = (i + 1) % n;
-      back += Math.hypot(s[j].x - s[i].x, s[j].y - s[i].y);
-      if (back > halfLen) break;
-      out.unshift(i);
-    }
-    let fwd = 0;
-    for (let k = 1; k < n; k++) {
-      const i = (mid + k) % n;
-      const j = (i - 1 + n) % n;
-      fwd += Math.hypot(s[i].x - s[j].x, s[i].y - s[j].y);
-      if (fwd > halfLen) break;
-      out.push(i);
-    }
-    return out;
-  }
-
-  /**
-   * Pit complex on the inside of the start/finish straight: pit lane and wall,
-   * a garage block with team-coloured doors and a paddock with team trucks.
-   * The deepest tier that fits the local infield clearance is used, at uniform
-   * depth, so it never reaches across onto the far side of the track.
-   */
-  private pitPaddock(): void {
-    const sc = CONFIG.scenery;
-    const s = this.track.samples;
-    const g = this.solids;
-    const win = this.windowAround(this.track.startDist, sc.pitLaneLen / 2);
+    const win = [...this.pit.window];
     if (win.length < 3) return;
-    const mid = s[win[Math.floor(win.length / 2)]];
-    const inSign = -this.outwardSign(mid);
-
-    const raw = win.map((i) => {
-      const inner = this.edgeOffset(i, inSign, 0);
-      return this.track.edgeRayDistance(inner.x, inner.y, inSign * s[i].nx, inSign * s[i].ny);
+    const side = this.pit.side;
+    const clr = win.map((i) => {
+      const e = this.edgeOffset(i, side, 0);
+      return this.track.edgeRayDistance(e.x, e.y, side * s[i].nx, side * s[i].ny);
     });
-    const clr = raw.map((_, k) => {
-      const w: number[] = [];
-      for (let d = -2; d <= 2; d++) {
-        const j = k + d;
-        if (j >= 0 && j < raw.length) w.push(raw[j]);
-      }
-      w.sort((a, b) => a - b);
-      return w[w.length >> 1];
-    });
-
-    const laneInner = sc.pitLaneGap;
-    const laneOuter = laneInner + sc.pitLaneWidth;
-    const garInner = laneOuter + 3;
-    const garOuter = garInner + sc.garageDepth;
-    const padInner = garOuter + 3;
-    const padOuter = padInner + sc.paddockDepth;
-    const margin = 8;
-
-    const longestRun = (depth: number): [number, number] => {
+    const laneIn = sc.pitLaneGap;
+    const laneOut = laneIn + sc.pitLaneWidth * 1.3;
+    const garIn = laneOut + 2;
+    const garOut = garIn + sc.garageDepth * 1.6;
+    const padIn = garOut + 4;
+    const padOut = padIn + sc.paddockDepth * 2.4;
+    const fits = (d: number) => {
       let best: [number, number] = [0, 0];
-      let start = -1;
+      let st = -1;
       for (let k = 0; k <= win.length; k++) {
-        const ok = k < win.length && clr[k] >= depth + margin;
-        if (ok && start < 0) start = k;
-        if (!ok && start >= 0) {
-          if (k - start > best[1] - best[0]) best = [start, k];
-          start = -1;
+        const ok = k < win.length && clr[k] >= d + 10;
+        if (ok && st < 0) st = k;
+        if (!ok && st >= 0) {
+          if (k - st > best[1] - best[0]) best = [st, k];
+          st = -1;
         }
       }
       return best;
     };
-
     const tiers = [
-      { depth: padOuter, garage: true, paddock: true },
-      { depth: garOuter, garage: true, paddock: false },
-      { depth: laneOuter, garage: false, paddock: false },
+      { depth: padOut, garage: true, paddock: true },
+      { depth: garOut, garage: true, paddock: false },
+      { depth: laneOut, garage: false, paddock: false },
     ];
     let tier: (typeof tiers)[number] | null = null;
     let sub: number[] = [];
     for (const t of tiers) {
-      const [a, b] = longestRun(t.depth);
+      const [a, b] = fits(t.depth);
       if (b - a >= 5) {
         tier = t;
         sub = win.slice(a, b);
@@ -446,58 +339,177 @@ export class Scenery3D {
       }
     }
     if (!tier) return;
-    const pm = this.edgeOffset(sub[sub.length >> 1], inSign, tier.depth / 2);
-    this.blockers.push({ x: pm.x, y: pm.y, r: sc.pitLaneLen / 2 + tier.depth });
 
-    const band = (inner: number, outer: number, y0: number, y1: number, side: number, top = side) => {
+    const P = (i: number, d: number) => this.edgeOffset(i, side, d);
+    const band = (d0: number, d1: number, lift0: number, lift1: number, col: number, topCol = col) => {
       for (let k = 1; k < sub.length; k++) {
+        const a = sub[k - 1];
+        const b = sub[k];
+        const ha = s[a].h;
+        const hb = s[b].h;
         g.prism(
-          [
-            this.edgeOffset(sub[k - 1], inSign, inner),
-            this.edgeOffset(sub[k], inSign, inner),
-            this.edgeOffset(sub[k], inSign, outer),
-            this.edgeOffset(sub[k - 1], inSign, outer),
-          ],
-          y0,
-          y1,
-          side,
-          top,
+          [P(a, d0), P(b, d0), P(b, d1), P(a, d1)],
+          [ha - 4, hb - 4, hb - 4, ha - 4],
+          [ha + lift0, hb + lift0, hb + lift1, ha + lift1],
+          col,
+          topCol,
         );
       }
     };
-
-    band(laneInner, laneOuter, 0, 0.45, 0x565b65);
-    band(laneInner - 1.6, laneInner, 0, 4, 0xe6e6e6, 0xd8342c); // pit wall
+    band(laneIn, laneOut, 0.55, 0.55, 0x6d7076, 0x5e6167);
+    band(laneIn - 1.8, laneIn, 4.5, 4.5, 0xe8e6e0, 0xc8412f); // pit wall
+    for (let k = 0; k < sub.length; k += 2) {
+      const oc = P(sub[k], tier.depth / 2);
+      this.occ.add(oc.x, oc.y, tier.depth / 2 + 4);
+    }
 
     if (tier.garage) {
-      band(garInner, garOuter, 0, 15, 0xe9ecef, 0x5b6370);
-      // Team-coloured garage doors facing the pit lane.
+      band(garIn, garOut, 13, 13, 0xeeece6, 0x6c737c);
+      // Glazed upper band and roof edge, the refs' long white pit building.
+      band(garIn - 0.4, garIn, 13, 13, 0x2e3a44);
       for (let k = 1; k < sub.length; k += 2) {
-        g.prism(
-          [
-            this.edgeOffset(sub[k - 1], inSign, garInner - 0.6),
-            this.edgeOffset(sub[k], inSign, garInner - 0.6),
-            this.edgeOffset(sub[k], inSign, garInner),
-            this.edgeOffset(sub[k - 1], inSign, garInner),
-          ],
-          0,
-          10,
-          TEAM[(k >> 1) % TEAM.length],
-        );
+        const a = sub[k - 1];
+        const b = sub[k];
+        const ha = s[a].h;
+        g.prism([P(a, garIn - 0.8), P(b, garIn - 0.8), P(b, garIn), P(a, garIn)], ha, ha + 7.5, TEAM[(k >> 1) % TEAM.length]);
       }
+      band(garIn + 2, garOut - 2, 13, 19, 0xdcdad4, 0x8b929a);
+      band(garIn + 1.5, garIn + 2, 14, 18, 0x2e3a44);
     }
     if (tier.paddock) {
-      band(padInner, padOuter, 0, 0.4, 0x9aa0a8);
-      // A row of team trucks parked across the paddock.
-      for (let k = 2; k < sub.length - 2; k += 3) {
-        const a = s[sub[k]];
-        const c = this.edgeOffset(sub[k], inSign, (padInner + padOuter) / 2);
-        const ox = inSign * a.nx;
-        const oy = inSign * a.ny;
-        const color = TEAM[k % TEAM.length];
-        g.box(c.x + ox * 3, c.y + oy * 3, ox, oy, 8, 3.2, 0.4, 9, color, 0xe6e8eb); // trailer
-        g.box(c.x - ox * 7, c.y - oy * 7, ox, oy, 2.6, 3, 0.4, 7.5, 0x2a2f38); // cab
+      band(padIn, padOut, 0.4, 0.4, 0x9da1a8, 0xa7abb1);
+      for (let k = 2; k < sub.length - 2; k += 2) {
+        const i = sub[k];
+        const p = s[i];
+        const ox = side * p.nx;
+        const oy = side * p.ny;
+        const heading = Math.atan2(oy, ox);
+        const team = TEAM[k % TEAM.length];
+        const c1 = P(i, padIn + 14);
+        this.kit.add("truck", c1.x, p.h + 0.4, c1.y, heading, 1, team);
+        if (k % 4 === 0) {
+          const c2 = P(i, padIn + (padOut - padIn) * 0.72);
+          this.kit.add("motorhome", c2.x, p.h + 0.4, c2.y, heading + Math.PI / 2, 1, team);
+        } else {
+          const c2 = P(i, padIn + (padOut - padIn) * 0.7);
+          this.kit.add("tent", c2.x, p.h + 0.4, c2.y, heading, 1.2, team);
+        }
+        for (let n = 0; n < 4; n++) {
+          const pp = P(i, padIn + 4 + this.rand() * (padOut - padIn - 8));
+          this.kit.add("person", pp.x + (this.rand() - 0.5) * 10, p.h + 0.4, pp.y + (this.rand() - 0.5) * 10, this.rand() * 6.3, 1, this.pick(TEAM));
+        }
+        if (k % 6 === 0) {
+          const lp = P(i, padIn + 2);
+          this.kit.add("lamp", lp.x, p.h + 0.4, lp.y, heading + Math.PI, 1.3);
+        }
       }
+      this.carPark(sub, side, padOut + 30);
+    }
+  }
+
+  /** A spectator car park: a paved lot with rows of parked cars. */
+  private carPark(sub: number[], side: number, dist: number): void {
+    const s = this.track.samples;
+    const mid = sub[sub.length >> 1];
+    const p = s[mid];
+    const ax = Math.cos(p.tangent);
+    const ay = Math.sin(p.tangent);
+    const ox = side * p.nx;
+    const oy = side * p.ny;
+    const c = this.edgeOffset(mid, side, dist + 60);
+    const hl = 150;
+    const hd = 55;
+    if (!this.occ.free(c.x, c.y, hl * 0.9)) return;
+    if (this.terrain.trackDistance(c.x, c.y) < this.half + 150) return;
+    this.occ.add(c.x, c.y, hl);
+    const h = this.ground(c.x, c.y);
+    this.solids.box(c.x, c.y, ax, ay, hl, hd, h - 6, h + 0.4, 0x8f9298, 0x7c7f85);
+    const cars = [0xe8e4da, 0x2a2d33, 0xc8412f, 0x4e7fc4, 0x9aa3ab, 0xe6b422, 0x5aa97b];
+    for (let row = -2; row <= 2; row++) {
+      for (let u = -hl + 8; u < hl - 8; u += 11) {
+        if (this.rand() < 0.2) continue;
+        const x = c.x + ax * u + ox * row * 20;
+        const y = c.y + ay * u + oy * row * 20;
+        this.kit.add("car_parked", x, h + 0.4, y, Math.atan2(oy, ox) + (row % 2 ? Math.PI : 0), 1, this.pick(cars));
+      }
+    }
+  }
+
+  // ----------------------------------------------------------- corner props
+  /** Yellow recovery telehandlers parked behind the sharpest corners. */
+  private telehandlers(): void {
+    const s = this.track.samples;
+    const runs = [...this.layout.runs].sort((a, b) => b.peakSeverity - a.peakSeverity).slice(0, CONFIG.scenery.craneCount + 2);
+    for (const run of runs) {
+      const i = run.indices[Math.round((run.apexStart + run.apexEnd) / 2)];
+      const out = -run.turnSign;
+      const p = this.edgeOffset(i, out, CONFIG.scenery.runOffWidth + 34);
+      if (!this.occ.free(p.x, p.y, 16) || this.terrain.trackDistance(p.x, p.y) < this.half + 50) continue;
+      this.occ.add(p.x, p.y, 16);
+      const heading = Math.atan2(-s[i].ny * out, -s[i].nx * out); // boom toward the track
+      this.kit.add("telehandler", p.x, this.ground(p.x, p.y), p.y, heading, 1.1);
+    }
+  }
+
+  /** Marshal towers every ~650 units and TV camera towers at the big corners. */
+  private marshalPosts(): void {
+    const s = this.track.samples;
+    const L = this.track.length;
+    const step = 650;
+    for (let d = 200; d < L; d += step) {
+      const idx = s.findIndex((p) => p.dist >= d);
+      if (idx < 0) break;
+      const out = outwardSign(this.track, s[idx]);
+      const p = this.edgeOffset(idx, out, CONFIG.scenery.runOffWidth + 22);
+      if (!this.occ.free(p.x, p.y, 12) || this.terrain.trackDistance(p.x, p.y) < this.half + 40) continue;
+      this.occ.add(p.x, p.y, 12);
+      this.kit.add("marshal_tower", p.x, this.ground(p.x, p.y), p.y, s[idx].tangent, 1.2);
+    }
+    const runs = [...this.layout.runs].sort((a, b) => b.peakSeverity - a.peakSeverity).slice(0, 5);
+    for (const run of runs) {
+      const i = run.indices[Math.max(0, run.apexStart - 3)];
+      const p = this.edgeOffset(i, run.turnSign, 40);
+      if (!this.occ.free(p.x, p.y, 10) || this.terrain.trackDistance(p.x, p.y) < this.half + 30) continue;
+      this.occ.add(p.x, p.y, 10);
+      this.kit.add("tv_platform", p.x, this.ground(p.x, p.y), p.y, s[i].tangent + Math.PI / 2, 1.3);
+    }
+  }
+
+  /**
+   * Sign gantries spanning the track on the longest straights (the start one
+   * included), like the refs' "Città / Parco" bridge.
+   */
+  private gantries(): void {
+    const s = this.track.samples;
+    const straights = [...this.layout.straights].sort((a, b) => this.runLength(b.indices) - this.runLength(a.indices)).slice(0, 3);
+    for (const st of straights) {
+      const i = st.indices[Math.floor(st.indices.length * 0.62)];
+      if (this.track.nearSelf[i]) continue;
+      const p = s[i];
+      const l = this.edgeOffset(i, 1, 16);
+      const r = this.edgeOffset(i, -1, 16);
+      const span = Math.hypot(l.x - r.x, l.y - r.y);
+      for (const e of [l, r]) this.kit.add("gantry_post", e.x, Math.min(e.h, this.ground(e.x, e.y)), e.y, p.tangent, 1.25);
+      const beamH = p.h;
+      this.kit.add("gantry_beam", p.x, beamH, p.y, p.tangent, new Vector3(1.25, 1.25, span / PROP_SCALE));
+      for (const u of [-span * 0.22, span * 0.22]) {
+        this.kit.add("sign_panel", p.x + p.nx * u, beamH, p.y + p.ny * u, p.tangent, 1.25);
+      }
+    }
+  }
+
+  /** Billboards on legs behind a few corners. */
+  private billboards(): void {
+    const s = this.track.samples;
+    for (const run of this.layout.runs) {
+      if (this.rand() < 0.35) continue;
+      const i = run.indices[run.indices.length >> 1];
+      const out = -run.turnSign;
+      const p = this.edgeOffset(i, out, CONFIG.scenery.runOffWidth + 70);
+      if (!this.occ.free(p.x, p.y, 18) || this.terrain.trackDistance(p.x, p.y) < this.half + 80) continue;
+      this.occ.add(p.x, p.y, 18);
+      const heading = Math.atan2(-s[i].ny * out, -s[i].nx * out);
+      this.kit.add("billboard", p.x, this.ground(p.x, p.y), p.y, heading, 1.6, this.pick(TEAM));
     }
   }
 }

@@ -31,33 +31,62 @@ export class Solids {
 
   /**
    * Extrude a convex footprint (any winding) from y0 to y1. Sides take
-   * `side`, the top `top` (defaults to the side colour).
+   * `side`, the top `top` (defaults to the side colour). y0/y1 may be given per
+   * vertex, so walls and foundations can follow sloping ground.
    */
-  prism(foot: Pt[], y0: number, y1: number, side: number, top = side): void {
+  prism(foot: Pt[], y0: number | number[], y1: number | number[], side: number, top = side): void {
     if (foot.length < 3) return;
+    const lo = (i: number) => (typeof y0 === "number" ? y0 : y0[i]);
+    const hi = (i: number) => (typeof y1 === "number" ? y1 : y1[i]);
     let area = 0;
     for (let i = 0; i < foot.length; i++) {
       const j = (i + 1) % foot.length;
       area += foot[i].x * foot[j].y - foot[j].x * foot[i].y;
     }
     // Normalise to counter-clockwise in (x, z) seen from +Y.
-    const f = area > 0 ? [...foot].reverse() : foot;
+    const order = foot.map((_, i) => i);
+    if (area > 0) order.reverse();
     cA.setHex(side);
     cB.setHex(top);
-    this.face(f.map((p) => [p.x, y1, p.y] as [number, number, number]), cB);
-    for (let i = 0; i < f.length; i++) {
-      const a = f[i];
-      const b = f[(i + 1) % f.length];
+    this.face(order.map((i) => [foot[i].x, hi(i), foot[i].y] as [number, number, number]), cB);
+    for (let k = 0; k < order.length; k++) {
+      const i = order[k];
+      const j = order[(k + 1) % order.length];
+      const a = foot[i];
+      const b = foot[j];
       this.face(
         [
-          [a.x, y0, a.y],
-          [b.x, y0, b.y],
-          [b.x, y1, b.y],
-          [a.x, y1, a.y],
+          [a.x, lo(i), a.y],
+          [b.x, lo(j), b.y],
+          [b.x, hi(j), b.y],
+          [a.x, hi(i), a.y],
         ],
         cA,
       );
     }
+  }
+
+  /**
+   * A wall of `thick` along segment a→b standing on the given base heights,
+   * from `bottom` to `top` above them (both may be negative for foundations).
+   */
+  wall(a: Pt, b: Pt, ha: number, hb: number, thick: number, bottom: number, top: number, side: number, topCol = side): void {
+    const len = Math.hypot(b.x - a.x, b.y - a.y);
+    if (len < 1e-6) return;
+    const nx = (-(b.y - a.y) / len) * (thick / 2);
+    const ny = ((b.x - a.x) / len) * (thick / 2);
+    this.prism(
+      [
+        { x: a.x + nx, y: a.y + ny },
+        { x: b.x + nx, y: b.y + ny },
+        { x: b.x - nx, y: b.y - ny },
+        { x: a.x - nx, y: a.y - ny },
+      ],
+      [ha + bottom, hb + bottom, hb + bottom, ha + bottom],
+      [ha + top, hb + top, hb + top, ha + top],
+      side,
+      topCol,
+    );
   }
 
   /** Oriented box: centre (cx, cy) on the ground plane, `a` = unit long axis. */

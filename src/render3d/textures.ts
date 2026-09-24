@@ -65,10 +65,10 @@ function noiseTexture(key: string, size: number, base: string, layers: NoiseLaye
 }
 
 export function asphaltTexture(): Texture {
-  return noiseTexture("asphalt", 128, "#4a4e57", [
-    { count: 320, r: [0.6, 1.6], color: "#3a3e47", alpha: 0.5 },
-    { count: 220, r: [0.5, 1.3], color: "#585d68", alpha: 0.4 },
-    { count: 60, r: [0.4, 0.9], color: "#6a7080", alpha: 0.25 },
+  return noiseTexture("asphalt", 128, "#55585e", [
+    { count: 320, r: [0.6, 1.6], color: "#474a50", alpha: 0.45 },
+    { count: 220, r: [0.5, 1.3], color: "#63666c", alpha: 0.4 },
+    { count: 60, r: [0.4, 0.9], color: "#74777c", alpha: 0.25 },
   ]);
 }
 
@@ -81,9 +81,9 @@ export function grassTexture(): Texture {
 }
 
 export function gravelTexture(): Texture {
-  return noiseTexture("gravel", 128, "#d9c18c", [
-    { count: 380, r: [0.7, 1.8], color: "#c7ad76", alpha: 0.55 },
-    { count: 280, r: [0.6, 1.5], color: "#e6d2a2", alpha: 0.45 },
-    { count: 90, r: [0.5, 1.1], color: "#a88f5c", alpha: 0.4 },
+  return noiseTexture("gravel", 128, "#dccaa2", [
+    { count: 380, r: [0.7, 1.8], color: "#cdb98f", alpha: 0.5 },
+    { count: 280, r: [0.6, 1.5], color: "#e9dcbd", alpha: 0.45 },
+    { count: 90, r: [0.5, 1.1], color: "#b8a37a", alpha: 0.35 },
   ]);
 }

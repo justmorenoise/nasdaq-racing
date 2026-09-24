@@ -45,7 +45,7 @@ export function telemetryBaseProfile(
   const span = Math.max(1, kmhMax - kmhMin);
   const relAt = (kmh: number) => vMin + (vMax - vMin) * ((kmh - kmhMin) / span);
 
-  const aligned = alignTelemetry(samples, telemetry, length, startDist, lapLengthM);
+  const aligned = alignTelemetry(samples, telemetry, length, startDist, lapLengthM)?.stations;
 
   if (!aligned || aligned.length < 2) {
     // Degenerate (no detectable corners): drop each speed at its raw distance.
@@ -75,7 +75,7 @@ export function telemetryBaseProfile(
  * in [0,1)), wrapping around the start/finish line (the segment from the last
  * station back to the first crosses pos = 1 → 0).
  */
-function interpCircular(pos: number[], rel: number[], x: number): number {
+export function interpCircular(pos: number[], rel: number[], x: number): number {
   const P = pos.length;
   if (x < pos[0] || x >= pos[P - 1]) {
     const a = pos[P - 1];
@@ -118,7 +118,7 @@ function alignTelemetry(
   length: number,
   startDist: number,
   lapLengthM: number,
-): AlignedStation[] | null {
+): { stations: AlignedStation[]; remap: (distM: number) => number } | null {
   const geom = curvaturePeaks(samples, startDist, length);
   if (!geom.length) return null;
 
@@ -159,7 +159,24 @@ function alignTelemetry(
     label: p.label,
   }));
   stations.sort((a, b) => a.pos - b.pos);
-  return stations;
+  return { stations, remap };
+}
+
+/**
+ * Real lap distance (m from the start/finish line) → lap fraction on the drawn
+ * geometry, through the same apex-anchored remap as the speed profile (or a
+ * linear map when the telemetry can't be aligned). Lets other per-distance data
+ * (the elevation profile) land where the track actually bends.
+ */
+export function telemetryDistanceRemap(
+  samples: TrackSample[],
+  telemetry: TelemetryPoint[] | undefined,
+  length: number,
+  startDist: number,
+  lapLengthM: number,
+): (distM: number) => number {
+  const aligned = telemetry?.length ? alignTelemetry(samples, telemetry, length, startDist, lapLengthM) : null;
+  return aligned?.remap ?? ((d) => ((((d / lapLengthM) % 1) + 1) % 1));
 }
 
 /**
@@ -204,7 +221,7 @@ export function telemetrySectors(
   startDist: number,
   lapLengthM: number,
 ): TelemetrySector[] {
-  const aligned = alignTelemetry(samples, telemetry, length, startDist, lapLengthM);
+  const aligned = alignTelemetry(samples, telemetry, length, startDist, lapLengthM)?.stations;
   const toDist = (pos: number) => (((startDist + pos * length) % length) + length) % length;
 
   if (aligned) {

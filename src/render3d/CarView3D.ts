@@ -10,9 +10,10 @@ import {
 import { CSS2DObject } from "three/examples/jsm/renderers/CSS2DRenderer.js";
 import type { Car } from "../sim/Car";
 import type { CarPose } from "../sim/RaceModel";
+import type { Track } from "../track/Track";
 import { hex, randomCascoColor } from "./colors";
 import { buildCar, CAR_LEN, WHEEL_R } from "./CarModel";
-import { headingToRotY } from "./coords";
+import { headingToRotY, LAYER } from "./coords";
 
 const ringGeo = new RingGeometry(0.9, 1, 48).rotateX(-Math.PI / 2);
 const goldMat = new MeshBasicMaterial({ color: 0xffd23f, transparent: true, opacity: 0.95, depthWrite: false, side: DoubleSide });
@@ -33,6 +34,8 @@ export class CarView3D {
   readonly root = new Group();
   /** Invisible, generous box used for click picking. */
   readonly hit: Mesh;
+  /** Tilts the whole car (and its ground rings) to the track's grade. */
+  private slope = new Group();
   private chassis = new Group();
   private wheels: Object3D[];
   private leaderRing = new Mesh(ringGeo, goldMat);
@@ -47,25 +50,27 @@ export class CarView3D {
 
   constructor(
     readonly car: Car,
+    private track: Track,
     private scale = 1,
     onPick: (symbol: string) => void,
   ) {
+    this.root.add(this.slope);
     const parts = buildCar(car.color, car.color2 ?? parseInt(randomCascoColor(car.symbol).slice(1), 16));
     this.wheels = parts.wheels;
     this.chassis.add(parts.root);
     this.chassis.scale.setScalar(scale);
-    this.root.add(this.chassis);
+    this.slope.add(this.chassis);
 
     this.leaderRing.visible = false;
     this.momentumRing.visible = false;
     this.leaderRing.position.y = this.momentumRing.position.y = 1.6;
     this.leaderRing.renderOrder = this.momentumRing.renderOrder = 2;
-    this.root.add(this.leaderRing, this.momentumRing);
+    this.slope.add(this.leaderRing, this.momentumRing);
 
     this.hit = new Mesh(hitGeo, hitMat);
     this.hit.scale.setScalar(scale);
     this.hit.userData.symbol = car.symbol;
-    this.root.add(this.hit);
+    this.slope.add(this.hit);
 
     this.labelEl.className = "car-label";
     this.labelEl.textContent = car.symbol;
@@ -91,8 +96,10 @@ export class CarView3D {
     isMomentum = false,
   ): void {
     const car = this.car;
-    this.root.position.set(pose.x, 0, pose.y);
+    this.root.position.set(pose.x, pose.h + LAYER.asphalt, pose.y);
     this.root.rotation.y = headingToRotY(pose.tangent);
+    const grade = (this.track.heightAt(car.progress + 9) - this.track.heightAt(car.progress - 9)) / 18;
+    this.slope.rotation.z = Math.atan(grade);
 
     // Lateral load from yaw rate × speed rolls the body toward the outside;
     // deceleration dips the nose. Both eased so data jumps don't jerk the body.

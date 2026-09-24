@@ -44,6 +44,7 @@ export class Camera3D {
   private prevRel = 1;
   private shake = 0;
   private tmp = new Vector3();
+  private meanH = 0;
 
   constructor(
     private camera: PerspectiveCamera,
@@ -51,7 +52,10 @@ export class Camera3D {
     layout: TrackLayout,
     private model: RaceModel,
     private screen: { width: number; height: number },
+    private ground: (x: number, y: number) => number = () => 0,
   ) {
+    const s = track.samples;
+    this.meanH = s.reduce((a, p) => a + p.h, 0) / s.length;
     this.tvCams = this.placeTvCams(layout);
     this.goal = this.fullRig();
     this.cur = { ...this.goal, target: this.goal.target.clone() };
@@ -123,7 +127,9 @@ export class Camera3D {
         const p = s[run.indices[Math.round((run.apexStart + run.apexEnd) / 2)]];
         const out = -run.turnSign;
         const off = this.track.def.width / 2 + c.tvCamOffset;
-        return new Vector3(p.x + p.nx * out * off, c.tvCamHeight, p.y + p.ny * out * off);
+        const x = p.x + p.nx * out * off;
+        const y = p.y + p.ny * out * off;
+        return new Vector3(x, Math.max(this.ground(x, y), p.h) + c.tvCamHeight, y);
       });
   }
 
@@ -154,17 +160,17 @@ export class Camera3D {
     const b = this.track.bounds;
     const yaw = c.fullYawSwing * Math.sin((2 * Math.PI * this.clock) / c.fullYawPeriod);
     const rig: Rig = {
-      target: new Vector3((b.minX + b.maxX) / 2, 0, (b.minY + b.maxY) / 2),
+      target: new Vector3((b.minX + b.maxX) / 2, this.meanH, (b.minY + b.maxY) / 2),
       yaw,
       pitch: c.fullPitch,
       dist: 1000,
       fov: c.fov,
     };
     const corners = [
-      new Vector3(b.minX, 0, b.minY),
-      new Vector3(b.maxX, 0, b.minY),
-      new Vector3(b.minX, 0, b.maxY),
-      new Vector3(b.maxX, 0, b.maxY),
+      new Vector3(b.minX, this.meanH, b.minY),
+      new Vector3(b.maxX, this.meanH, b.minY),
+      new Vector3(b.minX, this.meanH, b.maxY),
+      new Vector3(b.maxX, this.meanH, b.maxY),
     ];
     const lim = 1 - c.fullPadding * 2;
     const cam = this.camera.clone();
@@ -229,7 +235,7 @@ export class Camera3D {
     this.prevRel = car.relSpeed;
 
     return {
-      target: new Vector3(pose.x + fx * c.lookAhead, 4, pose.y + fz * c.lookAhead),
+      target: new Vector3(pose.x + fx * c.lookAhead, this.track.heightAt(car.progress + c.lookAhead) + 4, pose.y + fz * c.lookAhead),
       yaw: Math.atan2(-fx, -fz),
       pitch: MathUtils.lerp(c.chasePitchSlow, c.chasePitchFast, norm),
       dist,
@@ -241,7 +247,7 @@ export class Camera3D {
     const car = this.model.cars.get(symbol);
     if (!car || !this.tvCams.length) return null;
     const pose = this.model.poseForCar(car);
-    const at = new Vector3(pose.x, 4, pose.y);
+    const at = new Vector3(pose.x, pose.h + 4, pose.y);
     // Nearest trackside camera, with hysteresis so shots don't flicker.
     let best = -1;
     let bestD = Infinity;

@@ -18,18 +18,8 @@ export function headingToRotY(tangent: number): number {
 /** World units per metre: a car (≈5.6 m) is 30 units long, as in the 2D view. */
 export const UNITS_PER_M = 30 / 5.6;
 
-/**
- * Stacked ground layers. Heights are well above the depth-buffer resolution at
- * full-view distances so coplanar surfaces never z-fight, yet invisible from a
- * high camera (0.5 units ≈ 9 cm).
- */
+/** Heights above the local track surface that cars and rubber marks sit at. */
 export const LAYER = {
-  grass: 0,
-  gravel: 0.3,
-  pitSlab: 0.4,
   asphalt: 0.6,
-  patch: 0.8,
-  skid: 1.0,
-  line: 1.1,
-  kerb: 1.3,
+  skid: 0.66,
 } as const;

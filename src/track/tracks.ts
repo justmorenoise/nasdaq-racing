@@ -32,11 +32,13 @@ interface TrackEntry {
   width?: number;
   /** Gear-usage distribution: % of the lap per gear, keyed "1".."8". */
   distribuzione_marce?: Record<string, number>;
+  /** Real elevation profile [metres along the lap, metres above the lowest point] (Fast-F1 Z). */
+  altimetria?: [number, number][];
   /** Per-corner telemetry: speed (km/h) + gear at distances around the lap. */
   telemetria?: { punto?: string; distanza_metri: number; velocita_kmh: number; marcia: number }[];
 }
 
-const lapTimes = lapData as TrackEntry[];
+const lapTimes = lapData as unknown as TrackEntry[];
 
 /** Turn the circuits.json gear map {"1":…,"8":…} into an ordered [g1..g8] array. */
 function gearArray(d?: Record<string, number>): number[] | undefined {
@@ -83,6 +85,7 @@ const svgTracks: TrackDef[] = lapTimes
       gearDistribution: gearArray(entry.distribuzione_marce),
       telemetry: telemetryPoints(entry.telemetria),
       lapLengthM: entry.lunghezza_metri,
+      elevation: entry.altimetria,
     };
   });
 

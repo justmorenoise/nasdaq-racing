@@ -1,5 +1,11 @@
 import { computeSpeedProfile } from "./speedProfile";
-import { telemetrySectors, type TelemetryPoint, type TelemetrySector } from "./telemetry";
+import {
+  interpCircular,
+  telemetryDistanceRemap,
+  telemetrySectors,
+  type TelemetryPoint,
+  type TelemetrySector,
+} from "./telemetry";
 import { catmullRomPolyline, type Pt } from "./centerline";
 
 export type TrackTheme = "parco" | "bosco" | "citta" | "porto";
@@ -41,6 +47,8 @@ export interface TrackDef {
   /** Real lap length in metres (`lunghezza_metri`): scales telemetry distances to
    *  lap fractions so they align with the geometry. */
   lapLengthM?: number;
+  /** Real elevation profile: [metres from the start/finish line, metres above the lowest point]. */
+  elevation?: [number, number][];
 }
 
 export interface TrackSample {
@@ -61,6 +69,8 @@ export interface TrackSample {
   signedCurvature: number;
   /** Relative speed shape in [vMin, vMax], filled by the speed profile. */
   relSpeed: number;
+  /** Track surface height here (world units), from the real elevation profile. */
+  h: number;
 }
 
 export interface TrackPose {
@@ -69,7 +79,12 @@ export interface TrackPose {
   tangent: number;
   nx: number;
   ny: number;
+  /** Surface height (world units). */
+  h: number;
 }
+
+/** Real hills read flat at the game's oversized-car scale; exaggerate them a little. */
+const ELEVATION_EXAGGERATION = 1.5;
 
 /** Scale applied to SVG layouts so they sit in the same world scale (~0..1500). */
 export const SVG_SCALE = 3;
@@ -213,6 +228,7 @@ export class Track {
     this.rawLapTime = rawLapTime;
     this.gearBounds = gearBounds;
     this.speedRangeKmh = speedRangeKmh;
+    this.applyElevation();
     this.sectors =
       def.telemetry?.length && def.lapLengthM
         ? telemetrySectors(this.samples, def.telemetry, this.length, this.startDist, def.lapLengthM)
@@ -413,6 +429,7 @@ export class Track {
         curvature: Number.isFinite(curvature) ? curvature : 0,
         signedCurvature: Number.isFinite(signedCurvature) ? signedCurvature : 0,
         relSpeed: 0,
+        h: 0,
       });
     }
     const first = samples[0];
@@ -436,6 +453,36 @@ export class Track {
       if (s.y > maxY) maxY = s.y;
     }
     return { minX, minY, maxX, maxY };
+  }
+
+  /**
+   * Heights per sample from the real elevation profile, placed through the
+   * telemetry distance→arc remap and scaled at the track's own horizontal scale
+   * (world units per real metre), so slopes keep their real grade.
+   */
+  private applyElevation(): void {
+    const prof = this.def.elevation;
+    const lapM = this.def.lapLengthM;
+    if (!prof?.length || !lapM) return;
+    const remap = telemetryDistanceRemap(this.samples, this.def.telemetry, this.length, this.startDist, lapM);
+    const unitsPerM = (this.length / lapM) * ELEVATION_EXAGGERATION;
+    const pts = prof.map(([d, e]) => ({ pos: remap(d), h: e * unitsPerM })).sort((a, b) => a.pos - b.pos);
+    const pos = pts.map((p) => p.pos);
+    const hs = pts.map((p) => p.h);
+    for (const s of this.samples) {
+      const x = ((((s.dist - this.startDist) % this.length) + this.length) % this.length) / this.length;
+      s.h = interpCircular(pos, hs, x);
+    }
+  }
+
+  /** Surface height at an arc-length distance (auto-wrapped). */
+  heightAt(dist: number): number {
+    const d = this.wrap(dist);
+    const i = this.indexFor(d);
+    const a = this.samples[i];
+    const b = this.samples[Math.min(i + 1, this.samples.length - 1)];
+    const f = Math.min(Math.max((d - a.dist) / (b.dist - a.dist || 1e-6), 0), 1);
+    return a.h + (b.h - a.h) * f;
   }
 
   /** Wrap a distance into [0, length). */
@@ -472,6 +519,7 @@ export class Track {
       tangent: Math.atan2(ty, tx),
       nx: a.nx + (b.nx - a.nx) * f,
       ny: a.ny + (b.ny - a.ny) * f,
+      h: a.h + (b.h - a.h) * f,
     };
   }
 

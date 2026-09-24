@@ -4,6 +4,7 @@ import {
   MeshBasicMaterial,
   PlaneGeometry,
   Quaternion,
+  Euler,
   Vector3,
 } from "three";
 import type { Car } from "../sim/Car";
@@ -30,9 +31,9 @@ export class SkidMarks3D {
   private q = new Quaternion();
   private p = new Vector3();
   private s = new Vector3(1, 1, 1);
-  private up = new Vector3(0, 1, 0);
+  private e = new Euler();
 
-  constructor(track: Track) {
+  constructor(private track: Track) {
     const w = track.def.width;
     this.tyreOff = w * 0.22;
     const geo = new PlaneGeometry(w * 0.5, Math.max(1.4, w * 0.06)).rotateX(-Math.PI / 2);
@@ -41,9 +42,6 @@ export class SkidMarks3D {
       transparent: true,
       opacity: 0.12,
       depthWrite: false,
-      polygonOffset: true,
-      polygonOffsetFactor: -3,
-      polygonOffsetUnits: -3,
     });
     this.mesh = new InstancedMesh(geo, mat, CAPACITY);
     this.mesh.count = 0;
@@ -51,7 +49,7 @@ export class SkidMarks3D {
     this.mesh.renderOrder = 1;
   }
 
-  update(cars: Iterable<Car>, poseOf: (c: Car) => { x: number; y: number; tangent: number }): void {
+  update(cars: Iterable<Car>, poseOf: (c: Car) => { x: number; y: number; tangent: number; h: number }): void {
     let dirty = false;
     for (const car of cars) {
       if (!car.seeded) continue;
@@ -66,11 +64,13 @@ export class SkidMarks3D {
       this.lastStamp.set(car.symbol, car.distance);
 
       const pose = poseOf(car);
-      this.q.setFromAxisAngle(this.up, -pose.tangent);
+      const grade = (this.track.heightAt(car.progress + 8) - this.track.heightAt(car.progress - 8)) / 16;
+      this.e.set(0, -pose.tangent, Math.atan(grade), "YZX");
+      this.q.setFromEuler(this.e);
       const nx = -Math.sin(pose.tangent);
       const ny = Math.cos(pose.tangent);
       for (const off of [-this.tyreOff, this.tyreOff]) {
-        this.p.set(pose.x + nx * off, LAYER.skid, pose.y + ny * off);
+        this.p.set(pose.x + nx * off, pose.h + LAYER.skid, pose.y + ny * off);
         this.m.compose(this.p, this.q, this.s);
         this.mesh.setMatrixAt(this.next, this.m);
         this.next = (this.next + 1) % CAPACITY;

@@ -19,9 +19,10 @@ interface Particle {
   vz: number;
   life: number;
   maxLife: number;
+  floor: number;
 }
 
-type Pose = { x: number; y: number; tangent: number };
+type Pose = { x: number; y: number; tangent: number; h: number };
 
 const MAX = 600;
 const hot = new Color();
@@ -66,11 +67,11 @@ export class Sparks3D {
       this.lastEmit.set(key, this.clock);
       const pa = poseOf(c.a);
       const pb = poseOf(c.b);
-      this.spawn((pa.x + pb.x) / 2, (pa.y + pb.y) / 2, pa.tangent + Math.PI, c.intensity);
+      this.spawn((pa.x + pb.x) / 2, (pa.y + pb.y) / 2, (pa.h + pb.h) / 2 + 0.6, pa.tangent + Math.PI, c.intensity);
     }
   }
 
-  private spawn(x: number, z: number, dir: number, intensity: number): void {
+  private spawn(x: number, z: number, floor: number, dir: number, intensity: number): void {
     const s = CONFIG.sparks;
     const n = Math.max(1, Math.round(s.particleCount * intensity));
     for (let i = 0; i < n && this.particles.length < MAX; i++) {
@@ -79,13 +80,14 @@ export class Sparks3D {
       const life = s.lifeMin + Math.random() * (s.lifeMax - s.lifeMin);
       this.particles.push({
         x,
-        y: 1.5,
+        y: floor + 1,
         z,
         vx: Math.cos(ang) * speed,
         vy: speed * (0.25 + Math.random() * 0.45),
         vz: Math.sin(ang) * speed,
         life,
         maxLife: life,
+        floor,
       });
     }
   }
@@ -101,8 +103,8 @@ export class Sparks3D {
       p.x += p.vx * dt;
       p.y += p.vy * dt;
       p.z += p.vz * dt;
-      if (p.y < 0.5) {
-        p.y = 0.5;
+      if (p.y < p.floor) {
+        p.y = p.floor;
         p.vy *= -0.35; // skip along the asphalt
       }
       alive.push(p);
