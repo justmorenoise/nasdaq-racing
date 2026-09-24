@@ -8,6 +8,7 @@ import {
   Matrix4,
   LineBasicMaterial,
   LineSegments,
+  Mesh,
   MeshLambertMaterial,
   ShapeUtils,
   Vector2,
@@ -87,6 +88,14 @@ export class TrackMesh {
   private racing: number[];
   /** Smoothed signed curvature per sample (for inside-of-bend offset limits). */
   private kSm: number[];
+  /** Free room beyond each edge [left, right] per sample: up to the midline
+   *  toward any other stretch of track, and the turning radius on the inside. */
+  private reach!: [Float32Array, Float32Array];
+  private sGrid = new Map<string, number[]>();
+  /** Samples inside a tunnel (no trackside dressing there). */
+  private covered!: Uint8Array;
+  /** Tunnel roof + what stands on it; faded by the app while chasing a car inside. */
+  readonly tunnelRoof = new Group();
   private kerbAt: [Uint8Array, Uint8Array];
   private pit: { window: Set<number>; side: number };
   private fence: number[] = [];
@@ -101,6 +110,9 @@ export class TrackMesh {
     this.hw = this.halfWidths();
     this.racing = this.racingLine();
     this.kSm = smoothCircular(track.samples.slice(0, this.n).map((p) => p.signedCurvature), 3, 3);
+    this.computeReach();
+    this.covered = new Uint8Array(this.n);
+    for (let i = 0; i < this.n; i++) this.covered[i] = track.inTunnel(track.samples[i].dist) ? 1 : 0;
     this.kerbAt = [new Uint8Array(this.n), new Uint8Array(this.n)];
     this.pit = pitInfo(track);
 
@@ -113,6 +125,7 @@ export class TrackMesh {
     this.startFinish();
     this.barriers();
     this.bridges();
+    this.tunnel();
 
     const sc = CONFIG.scenery;
     const surf = this.batch.build({
@@ -186,12 +199,81 @@ export class TrackMesh {
   private edge(i: number, sgn: number, d: number, lift: number): Pt3 {
     const k = i % this.n;
     const s = this.track.samples[k];
-    const hw = this.hw[this.side(sgn)][k];
-    let w = hw + d;
-    // On the inside of a bend an offset beyond the turning radius folds the
-    // strip back over itself (tangled kerbs in hairpins/chicanes): cap it.
-    if (d > 0 && sgn * this.kSm[k] > 0) w = Math.min(w, Math.max(hw, 0.82 / Math.abs(this.kSm[k])));
+    const w = this.hw[this.side(sgn)][k] + (d > 0 ? Math.min(d, this.reach[this.side(sgn)][k]) : d);
     return { x: s.x + s.nx * sgn * w, y: s.y + s.ny * sgn * w, h: s.h + lift };
+  }
+
+  /** Room beyond the edge at sample `i` on side `sgn`. */
+  private room(i: number, sgn: number): number {
+    const k = i % this.n;
+    return this.covered?.[k] ? 0 : this.reach[this.side(sgn)][k];
+  }
+
+  /**
+   * Distance from `p` to the asphalt of any *other* stretch of track (samples
+   * far from `own` along the lap), or Infinity when none is near.
+   */
+  private otherClearance(p: Pt, own: number): number {
+    const s = this.track.samples;
+    const L = this.track.length;
+    const sep = Math.max(this.track.def.width * 4, 160);
+    const c = 60;
+    const ci = Math.floor(p.x / c);
+    const cj = Math.floor(p.y / c);
+    let best = Infinity;
+    for (let a = -3; a <= 3; a++) {
+      for (let b = -3; b <= 3; b++) {
+        for (const j of this.sGrid.get(`${ci + a},${cj + b}`) ?? []) {
+          const da = Math.abs(s[j].dist - s[own].dist);
+          if (Math.min(da, L - da) < sep) continue;
+          const d = Math.hypot(p.x - s[j].x, p.y - s[j].y) - Math.max(this.hw[0][j], this.hw[1][j]);
+          if (d < best) best = d;
+        }
+      }
+    }
+    return best;
+  }
+
+  /**
+   * How far trackside dressing may extend beyond each edge: stop at the
+   * midline toward another stretch of track (hairpins, Monaco's Mirabeau,
+   * parallel straights) so nothing reaches its kerbs or asphalt, and at the
+   * turning radius on the inside of a bend so strips never fold over.
+   */
+  private computeReach(): void {
+    const s = this.track.samples;
+    for (let i = 0; i < this.n; i++) {
+      const k = `${Math.floor(s[i].x / 60)},${Math.floor(s[i].y / 60)}`;
+      const l = this.sGrid.get(k) ?? [];
+      l.push(i);
+      this.sGrid.set(k, l);
+    }
+    const max = 140;
+    this.reach = [new Float32Array(this.n), new Float32Array(this.n)];
+    for (const sgn of [1, -1]) {
+      const side = this.side(sgn);
+      const raw = new Float32Array(this.n);
+      for (let i = 0; i < this.n; i++) {
+        const p = s[i];
+        const hw = this.hw[side][i];
+        let r = max;
+        if (sgn * this.kSm[i] > 0) r = Math.min(r, Math.max(0, 0.82 / Math.abs(this.kSm[i]) - hw));
+        for (let d = 0; d <= r; d += 3) {
+          const q = { x: p.x + p.nx * sgn * (hw + d), y: p.y + p.ny * sgn * (hw + d) };
+          if (this.otherClearance(q, i) < d + 4) {
+            r = Math.max(0, d - 4);
+            break;
+          }
+        }
+        raw[i] = r;
+      }
+      // A running minimum keeps neighbouring samples consistent (no spikes).
+      for (let i = 0; i < this.n; i++) {
+        let m = raw[i];
+        for (let d = -3; d <= 3; d++) m = Math.min(m, raw[(i + d + this.n) % this.n]);
+        this.reach[side][i] = m;
+      }
+    }
   }
 
   /** Like `edge`, but resting on the ground once it leaves the road's shoulder. */
@@ -291,6 +373,12 @@ export class TrackMesh {
       }
     }
     if (indices.length < 2) return;
+    // No room for the lip (tight gap to another stretch): leave it bare.
+    const roomy = indices.filter((i) => this.room(i, sgn) >= w * 0.5);
+    if (roomy.length < indices.length) {
+      if (roomy.length >= 2) this.kerbCells(roomy, sgn, w, cell);
+      return;
+    }
     for (const i of indices) this.kerbAt[this.side(sgn)][i] = 1;
     const inner = indices.map((i) => this.edge(i, sgn, -w * 0.25, LIFT.kerbIn));
     const outer = indices.map((i) => this.edge(i, sgn, w * 0.75, LIFT.kerbOut));
@@ -335,6 +423,7 @@ export class TrackMesh {
         if (sgn === this.pit.side && (this.pit.window.has(i) || this.pit.window.has(j))) continue;
         const k0 = this.kerbAt[side][i] ? kw : 0;
         const k1 = this.kerbAt[side][j] ? kw : 0;
+        if (Math.min(this.room(i, sgn), this.room(j, sgn)) < Math.max(k0, k1) + 3) continue;
         if (this.street) {
           // Street circuit: a raised pavement behind the barrier line.
           const s0 = k0 + 4;
@@ -377,9 +466,7 @@ export class TrackMesh {
         if (t0 < 0.05 && t1 < 0.05) continue;
         // Never spill onto another stretch of track: shrink until clear.
         const reach = (i: number, t: number) => {
-          let r = width * t;
-          const own = this.hw[this.side(sgn)][i] + start;
-          while (r > 2 && this.foreign(this.edge(i, sgn, start + r, 0), own + r)) r *= 0.7;
+          const r = Math.min(width * t, this.room(i, sgn) - start);
           return r > 2 ? r : 0;
         };
         const r0 = reach(i0, t0);
@@ -436,11 +523,6 @@ export class TrackMesh {
     }
   }
 
-  /** Is this a point where another stretch of track passes closer than our own centerline? */
-  private foreign(p: Pt, ownDist: number): boolean {
-    return this.terrain.trackDistance(p.x, p.y) < ownDist - 12 || this.track.onAsphalt(p.x, p.y);
-  }
-
   /**
    * Concrete walls wearing sponsor banners on both sides of every straight
    * (behind the verge), with a catch fence on top; skipped along the pit lane
@@ -462,10 +544,9 @@ export class TrackMesh {
           const i1 = idx[k];
           if (this.track.nearSelf[i0] || this.track.nearSelf[i1]) continue;
           if (sgn === this.pit.side && (this.pit.window.has(i0) || this.pit.window.has(i1))) continue;
+          if (this.room(i0, sgn) < off + 2 || this.room(i1, sgn) < off + 2) continue;
           const a = this.edge(i0, sgn, off, 0);
           const b = this.edge(i1, sgn, off, 0);
-          const own = this.hw[this.side(sgn)][i0] + off;
-          if (this.foreign(a, own) || this.foreign(b, own)) continue;
           if (k % 7 === 0) color = SPONSOR[Math.floor(k / 7 + i0) % SPONSOR.length];
           // Base down to whatever the ground does beside the road.
           const ga = Math.min(a.h, this.terrain.heightAt(a.x, a.y)) - 1.5;
@@ -517,10 +598,9 @@ export class TrackMesh {
         if (sgn === this.pit.side && (this.pit.window.has(i) || this.pit.window.has(j))) continue;
         const off0 = (this.kerbAt[side][i] ? kw : 0) + 2.5;
         const off1 = (this.kerbAt[side][j] ? kw : 0) + 2.5;
+        if (this.room(i, sgn) < off0 + 1 || this.room(j, sgn) < off1 + 1) continue;
         const a = this.edge(i, sgn, off0, 0);
         const b = this.edge(i + 1, sgn, off1, 0);
-        const own = this.hw[side][i] + off0;
-        if (this.foreign(a, own) || this.foreign(b, own)) continue;
         for (const [lo, hi] of [[2.2, 3.2], [3.8, 4.8]]) g.wall(a, b, a.h, b.h, 0.5, lo, hi, 0xb4bbc2, 0xcfd4d9);
         if (i % 2 === 0) g.wall(a, { x: a.x + (b.x - a.x) * 0.1, y: a.y + (b.y - a.y) * 0.1 }, a.h, a.h, 0.8, 0, 5, 0x8e969e);
         if (straight.has(i)) this.fence.push(a.x, a.h + 5, a.y, b.x, b.h + 5, b.y);
@@ -552,6 +632,80 @@ export class TrackMesh {
     pm.castShadow = true;
     g.add(pm);
     return g;
+  }
+
+  /**
+   * Tunnels: side walls with a strip of lights, and a roof slab (a terrace
+   * garden, with the hotel above at the entrance — Monaco's tunnel runs under
+   * the Fairmont). The roof is its own group so the app can fade it while the
+   * camera follows a car through.
+   */
+  private tunnel(): void {
+    if (!this.track.tunnels.length) return;
+    const walls = new Solids();
+    const roof = new Solids();
+    const H = 16;
+    const runs: number[][] = [];
+    let cur: number[] = [];
+    for (let i = 0; i <= this.n; i++) {
+      const k = i % this.n;
+      if (i < this.n && this.covered[k]) cur.push(k);
+      else if (cur.length) {
+        runs.push(cur);
+        cur = [];
+      }
+    }
+    for (const run of runs) {
+      for (let k = 1; k < run.length; k++) {
+        const i0 = run[k - 1];
+        const i1 = run[k];
+        for (const sgn of [1, -1]) {
+          const a = this.edge(i0, sgn, 1.5, 0);
+          const b = this.edge(i1, sgn, 1.5, 0);
+          walls.wall(a, b, a.h, b.h, 3, -2, H, 0xb8b2a6, 0xa9a397);
+          // Lights: a warm strip along the inner face of each wall.
+          const la = this.edge(i0, sgn, -0.2, 0);
+          const lb = this.edge(i1, sgn, -0.2, 0);
+          if (k % 2 === 0) walls.wall(la, lb, la.h, lb.h, 0.4, H - 4, H - 3, 0xffe2a0);
+        }
+        const l0 = this.edge(i0, 1, 5, 0);
+        const l1 = this.edge(i1, 1, 5, 0);
+        const r1 = this.edge(i1, -1, 5, 0);
+        const r0 = this.edge(i0, -1, 5, 0);
+        const h0 = l0.h + H;
+        const h1 = l1.h + H;
+        roof.prism([l0, l1, r1, r0], [h0, h1, h1, h0], [h0 + 3, h1 + 3, h1 + 3, h0 + 3], 0xb1ab9f, 0x7f9f5a);
+      }
+      // The hotel over the tunnel mouth: a long block following the road.
+      const hotel = run.slice(0, Math.max(2, Math.floor(run.length * 0.45)));
+      for (let k = 1; k < hotel.length; k++) {
+        const i0 = hotel[k - 1];
+        const i1 = hotel[k];
+        const l0 = this.edge(i0, 1, 2, 0);
+        const l1 = this.edge(i1, 1, 2, 0);
+        const r1 = this.edge(i1, -1, 2, 0);
+        const r0 = this.edge(i0, -1, 2, 0);
+        const b0 = l0.h + H + 3;
+        const b1 = l1.h + H + 3;
+        roof.prism([l0, l1, r1, r0], [b0, b1, b1, b0], [b0 + 34, b1 + 34, b1 + 34, b0 + 34], k % 3 === 0 ? 0x3e4e5c : 0xe9e2d4, 0xcfc9bd);
+      }
+    }
+    this.group.add(walls.build());
+    const roofMesh = roof.build();
+    const mat = roofMesh.material as MeshLambertMaterial;
+    mat.transparent = true;
+    this.tunnelRoof.add(roofMesh);
+    this.group.add(this.tunnelRoof);
+  }
+
+  /** Fade the tunnel roof (0 = gone, 1 = solid). */
+  setTunnelOpacity(o: number): void {
+    for (const m of this.tunnelRoof.children as Mesh[]) {
+      const mat = m.material as MeshLambertMaterial;
+      mat.opacity = o;
+      mat.depthWrite = o > 0.9;
+      m.visible = o > 0.02;
+    }
   }
 
   /** Parapets and piers where the track passes over another stretch of itself. */
@@ -593,12 +747,15 @@ export class TrackMesh {
     const runPts: Pt3[][] = this.layout.runs.map((run) => {
       if (this.street && !top.has(run)) return [];
       const m = run.indices.length;
-      const idx = run.indices.slice(Math.floor(m * 0.25), Math.ceil(m * 0.75)).filter((i) => !this.track.nearSelf[i]);
-      if (idx.length < 2) return [];
       const reach = this.street ? 4 + sc.runOffWidth * 0.5 + 3 : 12 + sc.runOffWidth + 4;
-      const line = idx.map((i) => this.edge(i, -run.turnSign, reach, 0));
-      const own = this.track.def.width / 2 + reach - 4;
-      return resampleByDistance(line, r * 2).filter((p) => !this.foreign(p, own));
+      // Wall at the back of the run-off, or as far as the room allows (never
+      // into another stretch's space); skipped where there's barely any room.
+      const idx = run.indices
+        .slice(Math.floor(m * 0.25), Math.ceil(m * 0.75))
+        .filter((i) => !this.track.nearSelf[i] && this.room(i, -run.turnSign) >= 14 + r);
+      if (idx.length < 2) return [];
+      const line = idx.map((i) => this.edge(i, -run.turnSign, Math.min(reach, this.room(i, -run.turnSign) - r), 0));
+      return resampleByDistance(line, r * 2);
     });
     const keep = runPts.map((pts) => pts.map(() => true));
     for (let a = 0; a < runPts.length; a++) {

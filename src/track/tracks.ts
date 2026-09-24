@@ -26,6 +26,8 @@ interface TrackEntry {
   tema?: TrackTheme;
   /** Street circuit: barriers at the kerb, sidewalks and buildings instead of run-off. */
   cittadino?: boolean;
+  /** Tunnels as [from-sector, to-sector] telemetry labels (the "to" sector's braking starts just after the exit). */
+  gallerie?: [string, string][];
   /** Per-circuit size lever: multiplies fallback width and car size (default 1). */
   scale?: number;
   /** Per-circuit kerb size lever: multiplies kerb width + cell length (default 1). */
@@ -85,6 +87,7 @@ const svgTracks: TrackDef[] = lapTimes
       verso: entry.verso,
       theme: entry.tema,
       street: entry.cittadino ?? false,
+      tunnels: entry.gallerie,
       gearDistribution: gearArray(entry.distribuzione_marce),
       telemetry: telemetryPoints(entry.telemetria),
       lapLengthM: entry.lunghezza_metri,

@@ -27,6 +27,7 @@ import { Leaderboard } from "./ui/Leaderboard";
 import { Controls } from "./ui/Controls";
 import { resolveLang, t } from "./i18n";
 import { StockSelector } from "./ui/StockSelector";
+import { Loader } from "./ui/Loader";
 import { Commentary } from "./ui/Commentary";
 import { detectBattles } from "./sim/battles";
 import { RaceClock } from "./sim/RaceClock";
@@ -79,24 +80,34 @@ async function boot() {
   // back to the default top 20 when there's no saved or shared selection.
   const initialSymbols = loadGridSelection(params) ?? [...DEFAULT_SYMBOLS];
 
+  const loader = new Loader();
+  loader.show(TRACKS.find((t) => t.id === trackId)?.name ?? "");
+  await loader.step(t("loader.track"), 0.08);
   const [track] = await Promise.all([buildTrack(trackId), loadCarModel(), loadKit()]);
   const layout = computeLayout(track);
+  await loader.step(t("loader.map"), 0.22);
   // Real surroundings from OpenStreetMap, fitted onto the drawn circuit (null = procedural only).
   const osm = await OsmWorld.load(track);
+  await loader.step(t("loader.terrain"), 0.35);
   const terrain = new Terrain(track, osm);
   stage.scene.add(terrain.mesh, terrain.skirt);
   const occupancy = new Occupancy();
   const osmEnv = osm ? new OsmEnvironment(track, terrain, occupancy, osm) : null;
   osmEnv?.prepareGround();
-  stage.scene.add(new TrackMesh(track, layout, terrain, osm).group);
+  await loader.step(t("loader.surface"), 0.55);
+  const trackMesh = new TrackMesh(track, layout, terrain, osm);
+  stage.scene.add(trackMesh.group);
+  await loader.step(t("loader.stands"), 0.7);
   const scenery = new Scenery3D(track, layout, terrain, occupancy, osm);
   stage.scene.add(scenery.group);
+  await loader.step(t("loader.world"), 0.85);
   if (osmEnv) {
     osmEnv.populate();
     stage.scene.add(osmEnv.group);
   } else {
     stage.scene.add(new Environment3D(track, terrain, occupancy).group);
   }
+  await loader.step(t("loader.go"), 1);
 
   // Rubber marks accumulate under the cars at hard-braking corners.
   const skid = new SkidMarks3D(track);
@@ -197,6 +208,8 @@ async function boot() {
     tracks: TRACKS.map((t) => ({ id: t.id, name: t.name })),
     currentTrack: trackId,
     onTrackChange: (id) => {
+      loader.show(TRACKS.find((tr) => tr.id === id)?.name ?? "");
+      void loader.step(t("loader.track"), 0.04);
       params.set("track", trackParamFor(id));
       location.search = params.toString();
     },
@@ -320,6 +333,7 @@ async function boot() {
     (distAhead * track.def.baseLapTime) / track.length;
 
   const tmpV = new Vector3();
+  let tunnelOpacity = 1;
   let settled = false;
   let uiAccum = 0;
   let directorAccum = 0;
@@ -372,6 +386,12 @@ async function boot() {
     const focusCar =
       clk.state === "running" && focusSym ? model.cars.get(focusSym) ?? null : null;
     audio.update(focusCar, track, scenery.grandstandDists, model.cars.values());
+
+    // Open the tunnel roof while the camera follows a car through it.
+    const followed = camera.followedSymbol ? model.cars.get(camera.followedSymbol) : null;
+    const roofTarget = followed && track.inTunnel(followed.progress) ? 0.12 : 1;
+    tunnelOpacity += (roofTarget - tunnelOpacity) * (1 - Math.exp(-6 * dt));
+    trackMesh.setTunnelOpacity(tunnelOpacity);
 
     if (CONFIG.debug.showGear) {
       if (focusCar) {
@@ -455,9 +475,14 @@ async function boot() {
   };
 
   let last = performance.now();
+  let first = true;
   stage.renderer.setAnimationLoop((now) => {
     frame(Math.min((now - last) / 1000, 0.05));
     last = now;
+    if (first) {
+      first = false;
+      loader.hide();
+    }
   });
 
   // Dev inspection hook (also lets the preview drive frames while the page is

@@ -38,6 +38,8 @@ export interface TrackDef {
   theme?: TrackTheme;
   /** Street circuit (render-only): barriers at the kerb, sidewalks, no gravel. */
   street?: boolean;
+  /** Tunnels between two telemetry sector labels (render-only). */
+  tunnels?: [string, string][];
   /** Gear-usage distribution (gears 1..8): the % of the lap spent in each gear,
    *  used to derive the gearbox shift points for this circuit. From
    *  `distribuzione_marce` in circuits.json; defaults applied if absent. */
@@ -206,6 +208,8 @@ export class Track {
    *  figure-8 crossover or near-touching passes). Renderers suppress edge
    *  decorations (kerbs) here so they don't get drawn across the other pass. */
   readonly nearSelf: boolean[];
+  /** Covered stretches as [startDist, endDist] arc-length ranges (may wrap). */
+  readonly tunnels: [number, number][];
 
   constructor(def: TrackDef, centerline: Pt[] = buildCenterline(def)) {
     this.def = def;
@@ -247,6 +251,7 @@ export class Track {
       this.edgeRight = null;
     }
     this.nearSelf = this.computeNearSelf();
+    this.tunnels = this.computeTunnels();
   }
 
   /**
@@ -513,6 +518,24 @@ export class Track {
       }
     }
     for (let k = 0; k <= n; k++) s[k].h += add[k];
+  }
+
+  private computeTunnels(): [number, number][] {
+    const out: [number, number][] = [];
+    for (const [from, to] of this.def.tunnels ?? []) {
+      const a = this.sectors.find((s) => s.label.startsWith(from));
+      const b = this.sectors.find((s) => s.label.startsWith(to));
+      if (!a || !b) continue;
+      // Exit a little before the next braking point, which sits in daylight.
+      out.push([a.dist, this.wrap(b.dist - this.def.width * 1.5)]);
+    }
+    return out;
+  }
+
+  /** Whether an arc-length distance is inside a tunnel. */
+  inTunnel(dist: number): boolean {
+    const d = this.wrap(dist);
+    return this.tunnels.some(([a, b]) => (a <= b ? d >= a && d <= b : d >= a || d <= b));
   }
 
   /** Surface height at an arc-length distance (auto-wrapped). */

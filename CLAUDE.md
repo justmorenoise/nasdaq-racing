@@ -100,9 +100,13 @@ to draw. Keep these layers decoupled — the sim must never import from `render3
   pavements/centre lines/zebra crossings/lamps, car parks, woods + mapped trees + theme filler groves away from
   town, harbour boats; `Scenery3D` puts stands at real OSM stands; `TrackMesh` uses real gravel traps when ≥8 are
   mapped. Without OSM data the procedural `Environment3D` is used. `circuits.json` `cittadino: true` (Monaco) =
-  street circuit: Armco at the kerb, sidewalks, few tarmac escapes, no elevation exaggeration. Track-edge
-  offsets are capped by the bend radius on the inside (no folded kerbs); overpasses get ≥6.5 m headroom
-  (`Track.liftOverpasses`). Dev: `camera.inspect({x,y,h,yaw,pitch,dist})` pins the camera.
+  street circuit: Armco at the kerb, sidewalks, few tarmac escapes, no elevation exaggeration. All trackside
+  dressing (kerb lips, verges/pavements, run-off, barriers, tyre walls) is limited by `TrackMesh.reach`: the
+  free room beyond each edge up to the midline toward any other stretch of track and the bend radius on the
+  inside, so nothing folds or spills onto a neighbouring pass (Mirabeau). Overpasses get ≥6.5 m headroom
+  (`Track.liftOverpasses`). `gallerie` in circuits.json ([from, to] telemetry sector labels) makes tunnels
+  (`Track.tunnels`/`inTunnel`): walls, lights, a roof + hotel block that `main.ts` fades while chasing a car
+  inside. `ui/Loader.ts` drives the loading card (markup inline in `index.html`) through the build stages. Dev: `camera.inspect({x,y,h,yaw,pitch,dist})` pins the camera.
   `Stage.ts`: low warm sun with soft shadows following the camera focus, hemisphere fill, GTAO (off on small
   views), AgX tone mapping and a desaturating grade pass. Cars: `CarModel.ts` loads `public/models/car.glb`
   (`_risorse/blender/build_car.py`), merged per material; `CarView3D` tilts the car to the track grade (slope
