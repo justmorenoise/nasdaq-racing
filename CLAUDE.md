@@ -77,27 +77,26 @@ to draw. Keep these layers decoupled — the sim must never import from `render3
   exposes `momentumLeaderSymbol()` (the "fastest lap" / hottest climber, distinct from the cumulative
   leader) and `driverOfTheDay()` (most overtakes). These feed the badges below and a future betting layer.
 - **`render3d/`** — Three.js, low-poly diorama look (refs in `_risorse/ref`). The 2D track plane maps to the
-  ground: world (x, y) → Three (x, h, y), Y up (`coords.ts`; `headingToRotY`, stacked ground `LAYER` heights).
-  `Stage.ts` owns renderer/scene/camera, hemisphere + sun light with soft shadows whose frustum follows the camera
-  focus (`focusShadows`; shadows off on the collapsed mobile thumbnail), and the CSS2D label layer.
-  `TrackMesh.ts` bakes the flat ground (asphalt from the real edge loops with infield holes, gravel run-off, kerbs,
-  lines, checkered start/finish + grid boxes) through `FlatBatch` (one mesh per material, world-space UVs, vertex
-  colours) plus instanced tyre stacks. `Scenery3D.ts` places grandstands with instanced spectators, pit lane/wall,
-  garages and team trucks, cranes and ad boards (same placement rules as the old 2D scenery) as merged
-  vertex-coloured `Solids`; it exposes `grandstandDists` (crowd audio) and `blockers`. `Environment3D.ts` adds the
-  themed surroundings from `circuits.json` `tema` (`parco` | `bosco` | `citta` | `porto`): instanced tree groves,
-  street-grid city blocks, sea + quay + boats — seeded per circuit so it's stable.
-  Cars: `CarModel.ts` loads `public/models/car.glb` (built by `_risorse/blender/build_car.py`, run with
-  `Blender --background --factory-startup --python build_car.py`; materials `body`/`helmet`/`carbon`/`tyre`, nodes
-  `wheel_*`) and merges it per material into a template (procedural stand-in if the GLB is missing). `CarView3D`
-  paints `body` with the stock colour and `helmet` with `color2` or a stable random colour, spins the wheels, adds
-  roll/pitch, gold P1 / purple "fastest lap" ground rings and a DOM ticker label (click → chase; a raycast on an
-  invisible hit box handles clicks on the car). `SkidMarks3D` is an instanced ring buffer of rubber streaks,
-  `Sparks3D` additive line particles. `Camera3D.ts` keeps the old API (`follow`/`toggleFollow`/`showFull`/
-  `followedSymbol`/`currentMode`) with three shots: **full** (bounds fitted by bisection at a tilt, slow yaw
-  drift), **chase** (behind/above the car, swings with it, pulls back and widens FOV with speed, shake under heavy
-  braking) and **tv** (trackside cameras at the sharpest corners, hard cuts; used by the auto-director via
-  `director()`). Tunables in `CONFIG.camera`. The minimap is a DOM canvas (`ui/Minimap.ts`).
+  ground: world (x, y) → Three (x, h, y), Y up (`coords.ts`). **Elevation is real**: `circuits.json`
+  `altimetria` (Fast-F1 Z, see the pipeline memory) is placed on the drawn geometry via
+  `telemetryDistanceRemap` and stored per sample as `TrackSample.h` / `TrackPose.h` (`Track.heightAt`), ×1.5.
+  `Terrain.ts` is a flat-shaded heightfield: pinned just under the track corridor (under the lower pass at
+  crossovers), harmonic fill outward, then themed hills/ridges/mountains, rim eased to the horizon skirt; for
+  `porto` a sea side is chosen. `heightAt`/`trackDistance`/`paintFaces` serve the other layers.
+  `TrackMesh.ts` builds the surfaces via `FlatBatch` (heights per vertex): asphalt with rubbered racing line,
+  edge lines, raised kerbs, green verge, gravel/tarmac run-off, start/finish + grid, walls with banners and a
+  line-geometry catch fence (lines stay out of the AO pass), bridge parapets/piers, tyre stacks.
+  `Kit.ts` loads `public/models/kit.glb` (35 low-poly assets from `_risorse/blender/build_kit.py`, run through
+  the Blender MCP; `kit_<name>` roots, `tint*` materials take per-instance colour) and instances them via
+  `KitInstancer`. `Scenery3D.ts` (stands with tiers/seat blocks/crowd/roof/flags, pit building + paddock + car
+  park, telehandlers, marshal/TV towers, gantries, billboards) and `Environment3D.ts` (tree groves, city blocks
+  with painted streets, harbour) share an `Occupancy` grid so nothing overlaps; `pitInfo.ts` has the pit window.
+  `Stage.ts`: low warm sun with soft shadows following the camera focus, hemisphere fill, GTAO (off on small
+  views), AgX tone mapping and a desaturating grade pass. Cars: `CarModel.ts` loads `public/models/car.glb`
+  (`_risorse/blender/build_car.py`), merged per material; `CarView3D` tilts the car to the track grade (slope
+  group) plus roll/pitch, spins wheels, ground rings, CSS2D label. `SkidMarks3D`/`Sparks3D` follow heights.
+  `Camera3D.ts`: full (bisection fit, yaw drift), chase (behind/above, speed-dependent) and tv (trackside cams,
+  hard cuts, used by `director()`); heights from the track/terrain. Minimap is a DOM canvas (`ui/Minimap.ts`).
 - **`audio/`** — `AudioEngine.ts`: race audio for a *single* focused car (P1 in full view, the chased car
   otherwise). The engine is **one synthesised voice** (coherent across gears/revs) voiced with material from
   real F1 recordings (`_risorse/audio_src/make_engine.py` → `public/audio/engine.json` + `engine_noise.wav`):
