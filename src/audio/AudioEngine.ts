@@ -6,65 +6,77 @@ import crowdUrl from "../../circuits/crowd.mp3?url";
 
 /**
  * Race audio for a SINGLE focused car (the leader in full view, the chased car
- * otherwise), built from real recordings (see public/audio/CREDITS.md):
- *  - the engine is two seamless loops cut from F1 V8 launches at Goodwood (a
- *    mid and a high rev band), equal-power cross-faded and re-pitched with
- *    playbackRate to follow the revs *within the current gear*: the note climbs
- *    toward the redline, drops on each upshift, jumps on each downshift (with a
- *    throttle blip per gear in a scalata). Lifting off closes a low-pass and
- *    drops the level, with the odd overrun crackle;
- *  - a second, quieter engine voice for the nearest rival, doppler-shifted, so
- *    a battle sounds like two cars nose to tail;
- *  - a sampled tyre squeal on hard braking, the crowd (crowd.mp3) while the car
- *    is alongside the grandstands, and a team-radio blip on an overtake.
- * The AudioContext is created on the first enable (autoplay policy).
+ * otherwise). The engine is synthesised — one continuous voice, so it stays
+ * coherent across every gear and rev — but voiced with material taken from
+ * real F1 recordings (public/audio/CREDITS.md, `_risorse/audio_src/make_engine.py`):
+ *  - the oscillator's waveform is a PeriodicWave built from the harmonic
+ *    spectrum of a Williams FW32 V8 at full throttle;
+ *  - the non-harmonic residue of a Ferrari F60 launch (combustion roar,
+ *    exhaust and mechanical noise) loops underneath, re-pitched with the revs
+ *    and amplitude-pulsed at the firing frequency so it stays locked to the note;
+ *  - a soft saturator and a low-pass that opens with revs and throttle.
+ * Pitch follows the revs *within the current gear* of the circuit's 8-speed
+ * box: it climbs to the redline, drops on each upshift (with an ignition-cut
+ * dip) and jumps on each downshift, one throttle blip per gear in a scalata.
+ * A second, quieter voice plays the nearest rival (doppler-shifted). Plus a
+ * sampled tyre squeal, the crowd near the stands and a team-radio blip.
  */
 
 const AUDIO_BASE = "audio/";
-const BRAKE_REL_NORM = 0.32; // below this normalised speed (and slowing) → squeal
-const BRAKE_COOLDOWN = 0.9; // s
-const CROWD_WINDOW = 150; // world units: how close counts as "at a grandstand"
+// Firing frequency per gear: just after an upshift and at the redline.
+const ENGINE_MIN_HZ = 205;
+const ENGINE_MAX_HZ = 520;
+const BRAKE_REL_NORM = 0.32;
+const BRAKE_COOLDOWN = 0.9;
+const CROWD_WINDOW = 150;
 const CROWD_FADE_IN = 1.0;
 const CROWD_FADE_OUT = 1.8;
 const CROWD_GAIN = 0.55;
 const RADIO_COOLDOWN = 4;
 const GEARS = 8;
 const SHIFT_HYST = 0.006;
-const DOWNSHIFT_GAP = 0.07; // s between blips in a fast multi-gear scalata
-/** Perceived engine pitch (Hz) just after an upshift and at the redline. */
-const PITCH_LO = 390;
-const PITCH_HI = 610;
-/** Rev band where the mid loop hands over to the high loop. */
-const XFADE_LO = 440;
-const XFADE_HI = 530;
-const RIVAL_RANGE = 140; // world units along the track
+const DOWNSHIFT_GAP = 0.075;
+const RIVAL_RANGE = 140;
 const SOUND_SPEED = 620; // world units/s (≈ 343 m/s at the game's scale)
 
-interface LoopSpec {
-  file: string;
-  pitch: number;
+interface EngineSpec {
+  low: { f0: number; real: number[]; imag: number[] };
+  noiseF0: number;
 }
 
-/** One engine: both rev-band loops playing in sync, mixed by the revs. */
-interface EngineVoice {
-  mid: AudioBufferSourceNode;
-  high: AudioBufferSourceNode;
-  midGain: GainNode;
-  highGain: GainNode;
+/** One synthesised engine: tone + sub + pulsed real noise → saturator → filter. */
+interface Voice {
+  osc: OscillatorNode;
+  sub: OscillatorNode;
+  pulse: OscillatorNode;
+  noise: AudioBufferSourceNode | null;
+  noiseGain: GainNode;
   filter: BiquadFilterNode;
   out: GainNode;
+}
+
+function saturationCurve(amount: number): Float32Array<ArrayBuffer> {
+  const n = 1024;
+  const c = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const x = (i / (n - 1)) * 2 - 1;
+    c[i] = Math.tanh(x * amount) / Math.tanh(amount);
+  }
+  return c;
 }
 
 export class AudioEngine {
   enabled = false;
   private ctx: AudioContext | null = null;
   private master!: GainNode;
-  private specs: { mid: LoopSpec; high: LoopSpec } | null = null;
+  private spec: EngineSpec | null = null;
+  private wave: PeriodicWave | null = null;
+  private noiseBuf: AudioBuffer | null = null;
   private buffers = new Map<string, AudioBuffer>();
-  private engine: EngineVoice | null = null;
-  private rival: EngineVoice | null = null;
+  private engine: Voice | null = null;
+  private rival: Voice | null = null;
   private rivalPan!: StereoPannerNode;
-  private noiseBuffer!: AudioBuffer;
+  private whiteNoise!: AudioBuffer;
   private crowdGain!: GainNode;
   private crowdSource: AudioBufferSourceNode | null = null;
   private crowdOn = false;
@@ -91,7 +103,6 @@ export class AudioEngine {
   private build(): void {
     const ctx = new AudioContext();
     this.ctx = ctx;
-    // A soft compressor on the bus keeps launches, squeals and the crowd from clipping.
     const comp = ctx.createDynamicsCompressor();
     comp.threshold.value = -14;
     comp.ratio.value = 3;
@@ -101,17 +112,20 @@ export class AudioEngine {
     this.master.connect(comp);
 
     const len = ctx.sampleRate;
-    this.noiseBuffer = ctx.createBuffer(1, len, ctx.sampleRate);
-    const data = this.noiseBuffer.getChannelData(0);
-    for (let i = 0; i < len; i++) data[i] = Math.random() * 2 - 1;
+    this.whiteNoise = ctx.createBuffer(1, len, ctx.sampleRate);
+    const d = this.whiteNoise.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
 
     this.crowdGain = ctx.createGain();
     this.crowdGain.gain.value = 0;
     this.crowdGain.connect(this.master);
-
     this.rivalPan = ctx.createStereoPanner();
     this.rivalPan.connect(this.master);
 
+    // The engine starts right away with a plain waveform; the recorded timbre
+    // and noise are swapped in as soon as they've loaded.
+    this.engine = this.voice(this.master);
+    this.rival = this.voice(this.rivalPan);
     void this.load(ctx);
   }
 
@@ -125,69 +139,98 @@ export class AudioEngine {
   }
 
   private async load(ctx: AudioContext): Promise<void> {
-    const [manifest, crowd, tyres] = await Promise.all([
-      fetch(AUDIO_BASE + "engine.json").then((r) => r.json() as Promise<{ mid: LoopSpec; high: LoopSpec }>).catch(() => null),
+    const [spec, noise, crowd, tyres] = await Promise.all([
+      fetch(AUDIO_BASE + "engine.json").then((r) => r.json() as Promise<EngineSpec>).catch(() => null),
+      this.fetchBuffer(ctx, AUDIO_BASE + "engine_noise.wav"),
       this.fetchBuffer(ctx, crowdUrl),
       this.fetchBuffer(ctx, AUDIO_BASE + "tyres.wav"),
     ]);
     if (crowd) this.buffers.set("crowd", crowd);
     if (tyres) this.buffers.set("tyres", tyres);
-    if (!manifest) return;
-    const [mid, high] = await Promise.all([
-      this.fetchBuffer(ctx, AUDIO_BASE + manifest.mid.file),
-      this.fetchBuffer(ctx, AUDIO_BASE + manifest.high.file),
-    ]);
-    if (!mid || !high) return;
-    this.buffers.set("mid", mid);
-    this.buffers.set("high", high);
-    this.specs = manifest;
-    this.engine = this.voice(this.master, 0.0001);
-    this.rival = this.voice(this.rivalPan, 0.0001);
+    this.spec = spec;
+    if (spec) {
+      // DC term first; PeriodicWave normalises the overall level itself.
+      const real = new Float32Array([0, ...spec.low.real]);
+      const imag = new Float32Array([0, ...spec.low.imag]);
+      this.wave = ctx.createPeriodicWave(real, imag);
+      for (const v of [this.engine, this.rival]) v?.osc.setPeriodicWave(this.wave);
+    }
+    if (noise) {
+      this.noiseBuf = noise;
+      for (const v of [this.engine, this.rival]) if (v) this.attachNoise(v);
+    }
   }
 
-  private voice(dest: AudioNode, gain: number): EngineVoice {
+  private voice(dest: AudioNode): Voice {
     const ctx = this.ctx!;
     const out = ctx.createGain();
-    out.gain.value = gain;
+    out.gain.value = 0.0001;
     const filter = ctx.createBiquadFilter();
     filter.type = "lowpass";
-    filter.frequency.value = 9000;
-    filter.Q.value = 0.8;
-    filter.connect(out).connect(dest);
-    const loop = (key: "mid" | "high") => {
-      const src = ctx.createBufferSource();
-      src.buffer = this.buffers.get(key)!;
-      src.loop = true;
-      const g = ctx.createGain();
-      g.gain.value = 0;
-      src.connect(g).connect(filter);
-      // Random start offset so the two loops never phase-lock audibly.
-      src.start(0, Math.random() * src.buffer.duration);
-      return [src, g] as const;
-    };
-    const [mid, midGain] = loop("mid");
-    const [high, highGain] = loop("high");
-    return { mid, high, midGain, highGain, filter, out };
+    filter.frequency.value = 3000;
+    filter.Q.value = 0.9;
+    const shaper = ctx.createWaveShaper();
+    shaper.curve = saturationCurve(2.2);
+    shaper.oversample = "2x";
+    shaper.connect(filter).connect(out).connect(dest);
+
+    const osc = ctx.createOscillator();
+    osc.type = "sawtooth";
+    osc.frequency.value = ENGINE_MIN_HZ;
+    const toneGain = ctx.createGain();
+    toneGain.gain.value = 0.55;
+    osc.connect(toneGain).connect(shaper);
+
+    const sub = ctx.createOscillator();
+    sub.type = "triangle";
+    sub.frequency.value = ENGINE_MIN_HZ / 2;
+    const subGain = ctx.createGain();
+    subGain.gain.value = 0.22;
+    sub.connect(subGain).connect(shaper);
+
+    // Real noise, amplitude-pulsed at the firing frequency: base level plus a
+    // sine at the engine frequency feeding the gain param (audio-rate AM).
+    const noiseGain = ctx.createGain();
+    noiseGain.gain.value = 0.35;
+    noiseGain.connect(shaper);
+    const pulse = ctx.createOscillator();
+    pulse.frequency.value = ENGINE_MIN_HZ;
+    const depth = ctx.createGain();
+    depth.gain.value = 0.3;
+    pulse.connect(depth).connect(noiseGain.gain);
+
+    osc.start();
+    sub.start();
+    pulse.start();
+    return { osc, sub, pulse, noise: null, noiseGain, filter, out };
   }
 
-  /** Point an engine voice at a perceived pitch (Hz) and mix its two loops. */
-  private drive(v: EngineVoice, hz: number, t: number, tc: number): void {
-    const s = this.specs!;
-    v.mid.playbackRate.setTargetAtTime(hz / s.mid.pitch, t, tc);
-    v.high.playbackRate.setTargetAtTime(hz / s.high.pitch, t, tc);
-    const x = Math.max(0, Math.min(1, (hz - XFADE_LO) / (XFADE_HI - XFADE_LO)));
-    v.midGain.gain.setTargetAtTime(Math.cos((x * Math.PI) / 2), t, 0.05);
-    v.highGain.gain.setTargetAtTime(Math.sin((x * Math.PI) / 2), t, 0.05);
+  private attachNoise(v: Voice): void {
+    const src = this.ctx!.createBufferSource();
+    src.buffer = this.noiseBuf;
+    src.loop = true;
+    src.connect(v.noiseGain);
+    src.start(0, Math.random() * this.noiseBuf!.duration);
+    v.noise = src;
   }
 
-  /** Revs within the gear for a car, as a perceived engine pitch. */
-  private pitchFor(relSpeed: number, gear: number, track: Track): number {
+  /** Point a voice at a firing frequency. */
+  private drive(v: Voice, hz: number, t: number, tc: number): void {
+    v.osc.frequency.setTargetAtTime(hz, t, tc);
+    v.sub.frequency.setTargetAtTime(hz / 2, t, tc);
+    v.pulse.frequency.setTargetAtTime(hz, t, tc);
+    // Noise was recorded at noiseF0; its spectrum rides up and down with the revs.
+    if (v.noise && this.spec) v.noise.playbackRate.setTargetAtTime(Math.max(0.35, (hz / this.spec.noiseF0) * 1.25), t, tc);
+  }
+
+  /** Firing frequency for revs within the gear. */
+  private hzFor(relSpeed: number, gear: number, track: Track): { hz: number; inGear: number } {
     const { vMin } = CONFIG.profile;
     const bounds = track.gearBounds;
     const lo = Math.max(vMin, gear > 1 ? bounds[gear - 2] : vMin);
     const hi = bounds[gear - 1];
     const inGear = hi > lo + 1e-4 ? Math.max(0, Math.min(1, (relSpeed - lo) / (hi - lo))) : 1;
-    return PITCH_LO + inGear * (PITCH_HI - PITCH_LO);
+    return { hz: ENGINE_MIN_HZ + inGear * (ENGINE_MAX_HZ - ENGINE_MIN_HZ), inGear };
   }
 
   update(car: Car | null, track: Track, grandstandDists: number[], field?: Iterable<Car>): void {
@@ -213,21 +256,20 @@ export class AudioEngine {
     else if (target < this.gear) this.downshift(t, this.gear - target);
     this.gear = target;
 
-    if (this.engine) {
-      const e = this.engine;
-      const hz = this.pitchFor(car.relSpeed, this.gear, track);
-      // Revs fall fast on an upshift; a scalata's blips are layered on top.
-      if (t >= this.blipUntil) this.drive(e, hz, t, 0.035);
-      // On the throttle: open and loud. Lifting off: darker and quieter.
-      e.filter.frequency.setTargetAtTime(slowing ? 1400 : 5200 + rel * 4000, t, slowing ? 0.04 : 0.12);
-      e.out.gain.setTargetAtTime(slowing ? 0.28 : 0.45 + rel * 0.2, t, 0.06);
-      if (slowing && t - this.lastPop > 0.09 && Math.random() < 0.35) {
-        this.lastPop = t;
-        this.pop(t);
-      }
+    const e = this.engine!;
+    const { hz, inGear } = this.hzFor(car.relSpeed, this.gear, track);
+    if (t >= this.blipUntil) this.drive(e, hz, t, 0.03);
+    // On the throttle: open, loud, more roar. Lifting off: darker, quieter,
+    // with overrun crackle.
+    e.filter.frequency.setTargetAtTime(slowing ? 1100 : 1800 + inGear * 3200 + rel * 1200, t, slowing ? 0.05 : 0.1);
+    e.noiseGain.gain.setTargetAtTime(slowing ? 0.18 : 0.3 + inGear * 0.25, t, 0.08);
+    e.out.gain.setTargetAtTime(slowing ? 0.07 : 0.1 + inGear * 0.08, t, 0.06);
+    if (slowing && t - this.lastPop > 0.09 && Math.random() < 0.3) {
+      this.lastPop = t;
+      this.pop(t);
     }
 
-    if (this.rival && field) this.updateRival(car, track, field, t);
+    if (field) this.updateRival(car, track, field, t);
 
     if (rel < BRAKE_REL_NORM && slowing && t - this.lastBrake > BRAKE_COOLDOWN) {
       this.lastBrake = t;
@@ -262,7 +304,7 @@ export class AudioEngine {
     for (const o of field) {
       if (o === car) continue;
       let d = track.wrap(o.progress - car.progress);
-      if (d > L / 2) d -= L; // signed: + ahead, − behind
+      if (d > L / 2) d -= L;
       if (Math.abs(d) < Math.abs(bestD)) {
         bestD = d;
         best = o;
@@ -274,14 +316,13 @@ export class AudioEngine {
       return;
     }
     const closeness = 1 - Math.abs(bestD) / RIVAL_RANGE;
-    // Approaching (a faster car behind, or a slower one ahead) raises the pitch.
     const approach = bestD < 0 ? best.worldSpeed - car.worldSpeed : car.worldSpeed - best.worldSpeed;
     const doppler = SOUND_SPEED / (SOUND_SPEED - Math.max(-200, Math.min(200, approach)));
-    const hz = this.pitchFor(best.relSpeed, gearAtSpeed(best.relSpeed, track.gearBounds), track) * doppler;
-    this.drive(r, hz, t, 0.08);
-    r.filter.frequency.setTargetAtTime(1800 + closeness * 4000, t, 0.1);
-    r.out.gain.setTargetAtTime(0.02 + closeness * closeness * 0.22, t, 0.1);
-    this.rivalPan.pan.setTargetAtTime(bestD > 0 ? 0.25 : -0.25, t, 0.2);
+    const { hz } = this.hzFor(best.relSpeed, gearAtSpeed(best.relSpeed, track.gearBounds), track);
+    this.drive(r, hz * doppler, t, 0.08);
+    r.filter.frequency.setTargetAtTime(900 + closeness * 2600, t, 0.1);
+    r.out.gain.setTargetAtTime(0.005 + closeness * closeness * 0.06, t, 0.1);
+    this.rivalPan.pan.setTargetAtTime(bestD > 0 ? 0.3 : -0.3, t, 0.2);
   }
 
   private setCrowd(on: boolean, t: number): void {
@@ -314,28 +355,28 @@ export class AudioEngine {
     const g = ctx.createGain();
     const dur = 0.35 + Math.random() * 0.3;
     g.gain.setValueAtTime(0.0001, t);
-    g.gain.exponentialRampToValueAtTime(0.22, t + 0.05);
+    g.gain.exponentialRampToValueAtTime(0.2, t + 0.05);
     g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
     src.connect(g).connect(this.master);
     src.start(t, Math.random() * (buf.duration - 1));
     src.stop(t + dur + 0.05);
   }
 
-  /** Overrun crackle: a very short band-passed noise crack from the exhaust. */
+  /** Overrun crackle: a very short band-passed crack from the exhaust. */
   private pop(t: number): void {
     const ctx = this.ctx!;
     const src = ctx.createBufferSource();
-    src.buffer = this.noiseBuffer;
+    src.buffer = this.noiseBuf ?? this.whiteNoise;
     const bp = ctx.createBiquadFilter();
     bp.type = "bandpass";
-    bp.frequency.value = 500 + Math.random() * 700;
+    bp.frequency.value = 450 + Math.random() * 600;
     bp.Q.value = 1.2;
     const g = ctx.createGain();
     g.gain.setValueAtTime(0.0001, t);
-    g.gain.exponentialRampToValueAtTime(0.16 + Math.random() * 0.12, t + 0.004);
+    g.gain.exponentialRampToValueAtTime(0.14 + Math.random() * 0.1, t + 0.004);
     g.gain.exponentialRampToValueAtTime(0.0001, t + 0.05);
     src.connect(bp).connect(g).connect(this.master);
-    src.start(t, Math.random() * 0.8);
+    src.start(t, Math.random() * 0.4);
     src.stop(t + 0.06);
   }
 
@@ -362,35 +403,34 @@ export class AudioEngine {
     });
   }
 
-  /** Upshift: ignition cut — a ~40 ms dip in the engine level plus a gearbox tick. */
+  /** Upshift: ~40 ms ignition cut on the engine voice plus a gearbox tick. */
   private upshift(t: number): void {
-    const e = this.engine;
-    if (e) {
-      e.out.gain.cancelScheduledValues(t);
-      e.out.gain.setValueAtTime(e.out.gain.value, t);
-      e.out.gain.linearRampToValueAtTime(e.out.gain.value * 0.35, t + 0.012);
-      e.out.gain.linearRampToValueAtTime(e.out.gain.value, t + 0.05);
-    }
-    this.tick(t, 2600, 0.12);
+    const g = this.engine!.out.gain;
+    g.cancelScheduledValues(t);
+    g.setValueAtTime(g.value, t);
+    g.linearRampToValueAtTime(g.value * 0.3, t + 0.012);
+    g.linearRampToValueAtTime(g.value, t + 0.05);
+    this.tick(t, 2600, 0.1);
   }
 
   /**
-   * Downshift scalata: one rev-matching throttle blip per gear dropped, spaced
-   * out so a multi-gear drop into a hairpin sounds like "blap-blap-blap".
+   * Downshift scalata: the same engine voice blips its revs once per gear
+   * dropped ("blap-blap-blap"), then settles on the new, higher revs.
    */
   private downshift(t: number, drops: number): void {
-    const e = this.engine;
+    const e = this.engine!;
     const n = Math.min(drops, GEARS);
     for (let i = 0; i < n; i++) {
       const start = t + i * DOWNSHIFT_GAP;
-      this.tick(start, 2200, 0.08);
-      if (!e || !this.specs) continue;
-      const peak = PITCH_HI * (0.92 + i * 0.02);
-      for (const [src, spec] of [[e.mid, this.specs.mid], [e.high, this.specs.high]] as const) {
-        src.playbackRate.setTargetAtTime(peak / spec.pitch, start, 0.012);
-        src.playbackRate.setTargetAtTime((PITCH_LO * 1.1) / spec.pitch, start + 0.035, 0.03);
+      this.tick(start, 2200, 0.07);
+      const peak = ENGINE_MAX_HZ * (0.9 + i * 0.03);
+      for (const p of [e.osc.frequency, e.pulse.frequency]) {
+        p.setTargetAtTime(peak, start, 0.012);
+        p.setTargetAtTime(ENGINE_MIN_HZ * 1.25, start + 0.035, 0.03);
       }
-      e.out.gain.setTargetAtTime(0.5, start, 0.01);
+      e.sub.frequency.setTargetAtTime(peak / 2, start, 0.012);
+      e.sub.frequency.setTargetAtTime((ENGINE_MIN_HZ * 1.25) / 2, start + 0.035, 0.03);
+      e.noiseGain.gain.setTargetAtTime(0.6, start, 0.01);
     }
     this.blipUntil = t + n * DOWNSHIFT_GAP + 0.05;
   }
@@ -398,7 +438,7 @@ export class AudioEngine {
   private tick(t: number, freq: number, gain: number): void {
     const ctx = this.ctx!;
     const src = ctx.createBufferSource();
-    src.buffer = this.noiseBuffer;
+    src.buffer = this.whiteNoise;
     const bp = ctx.createBiquadFilter();
     bp.type = "bandpass";
     bp.frequency.value = freq;

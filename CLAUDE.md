@@ -99,16 +99,17 @@ to draw. Keep these layers decoupled — the sim must never import from `render3
   braking) and **tv** (trackside cameras at the sharpest corners, hard cuts; used by the auto-director via
   `director()`). Tunables in `CONFIG.camera`. The minimap is a DOM canvas (`ui/Minimap.ts`).
 - **`audio/`** — `AudioEngine.ts`: race audio for a *single* focused car (P1 in full view, the chased car
-  otherwise). The engine is **sample-based**: two seamless loops (`public/audio/engine_mid|high.wav`, cut from real
-  F1 V8 recordings by `_risorse/audio_src/make_loops.py`; perceived pitch in `engine.json`) equal-power
-  cross-faded and re-pitched with `playbackRate` to follow the **revs within the current gear** of an 8-speed box
-  whose shift points are per-circuit (`track.gearBounds`, from telemetry or `distribuzione_marce` via
-  `track/gearbox.ts`). Upshift = short ignition-cut dip; downshift = one throttle blip per gear dropped; lifting
-  off closes a low-pass with overrun crackles. A second voice plays the nearest rival along the track, doppler
-  shifted. Plus a sampled tyre squeal on hard braking, the looping crowd (`circuits/crowd.mp3`) opened while the
-  focused car is within `CROWD_WINDOW` of a grandstand (fades out after the last one) and a team-radio blip on an
-  overtake. Off by default; the 🔊 toggle builds the `AudioContext` on the first click. Sample licences
-  (CC BY-SA / CC BY) are in `public/audio/CREDITS.md`.
+  otherwise). The engine is **one synthesised voice** (coherent across gears/revs) voiced with material from
+  real F1 recordings (`_risorse/audio_src/make_engine.py` → `public/audio/engine.json` + `engine_noise.wav`):
+  a PeriodicWave oscillator built from a real V8's harmonic spectrum, a sub oscillator, and the recording's
+  non-harmonic residue (combustion/exhaust noise) re-pitched with the revs and amplitude-pulsed at the firing
+  frequency, through a soft saturator and a low-pass that opens with revs/throttle. Pitch = **revs within the
+  current gear** of an 8-speed box with per-circuit shift points (`track.gearBounds`, from telemetry or
+  `distribuzione_marce` via `track/gearbox.ts`). Upshift = ignition-cut dip; downshift = one rev blip of the same
+  voice per gear dropped; lifting off darkens it with overrun crackles. A second quieter voice plays the nearest
+  rival, doppler-shifted. Plus a sampled tyre squeal, the looping crowd (`circuits/crowd.mp3`) opened near the
+  grandstands and a team-radio blip on an overtake. Off by default; the 🔊 toggle builds the `AudioContext` on the
+  first click. Sample licences in `public/audio/CREDITS.md`.
   A debug `CONFIG.debug.showGear` badge (the **info_view**, stacked between minimap and the Live pill) shows the
   focused car's gear + km/h (`track.speedRangeKmh`) and the telemetry sector name (`track.sectorAt`).
 - **`ui/`** — DOM overlays above the canvas (easier to style than canvas text), inside `.ui-overlay`
