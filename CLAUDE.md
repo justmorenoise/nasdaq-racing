@@ -80,7 +80,8 @@ to draw. Keep these layers decoupled — the sim must never import from `render3
   ground: world (x, y) → Three (x, h, y), Y up (`coords.ts`). **Elevation is real**: `circuits.json`
   `altimetria` (Fast-F1 Z, see the pipeline memory) is placed on the drawn geometry via
   `telemetryDistanceRemap` and stored per sample as `TrackSample.h` / `TrackPose.h` (`Track.heightAt`), ×1.5.
-  `Terrain.ts` is a flat-shaded heightfield: pinned just under the track corridor (under the lower pass at
+  `Terrain.ts` is a flat-shaded heightfield (heights computed by the pure `terrainField.ts` in a Web Worker,
+  `terrainWorker.ts`, so the loading card stays animated; `Terrain.create` falls back to the main thread): pinned just under the track corridor (under the lower pass at
   crossovers), harmonic fill outward, then themed hills/ridges/mountains, rim eased to the horizon skirt; for
   `porto` a sea side is chosen. `heightAt`/`trackDistance`/`paintFaces` serve the other layers.
   `TrackMesh.ts` builds the surfaces via `FlatBatch` (heights per vertex): asphalt with rubbered racing line,
@@ -106,7 +107,12 @@ to draw. Keep these layers decoupled — the sim must never import from `render3
   inside, so nothing folds or spills onto a neighbouring pass (Mirabeau). Overpasses get ≥6.5 m headroom
   (`Track.liftOverpasses`). `gallerie` in circuits.json ([from, to] telemetry sector labels) makes tunnels
   (`Track.tunnels`/`inTunnel`): walls, lights, a roof + hotel block that `main.ts` fades while chasing a car
-  inside. `ui/Loader.ts` drives the loading card (markup inline in `index.html`) through the build stages. Dev: `camera.inspect({x,y,h,yaw,pitch,dist})` pins the camera.
+  inside. Driving: `track/racingLine.ts` gives each circuit a minimum-curvature racing line (projected
+  Gauss–Seidel, coarse-to-fine, within `Track.hw` less half a car) → `Track.racing`/`racingAt`/`lateralLimits`;
+  cars drive it plus `Car.latOff` (critically damped spring, `sim/overtake.ts`: attackers commit to the inside of
+  the next corner, defenders only cover from afar then leave a car's width), `RaceModel.poseForCar` heads along
+  the actual path, and `RaceModel.separate` resolves oriented-box overlaps (sideways, or the car behind yields).
+  `ui/Loader.ts` drives the loading card (markup inline in `index.html`) through the build stages. Dev: `camera.inspect({x,y,h,yaw,pitch,dist})` pins the camera.
   `Stage.ts`: low warm sun with soft shadows following the camera focus, hemisphere fill, GTAO (off on small
   views), AgX tone mapping and a desaturating grade pass. Cars: `CarModel.ts` loads `public/models/car.glb`
   (`_risorse/blender/build_car.py`), merged per material; `CarView3D` tilts the car to the track grade (slope

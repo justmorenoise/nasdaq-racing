@@ -89,7 +89,7 @@ async function boot() {
   // Real surroundings from OpenStreetMap, fitted onto the drawn circuit (null = procedural only).
   const osm = await OsmWorld.load(track);
   await loader.step(t("loader.terrain"), 0.35);
-  const terrain = new Terrain(track, osm);
+  const terrain = await Terrain.create(track, osm);
   stage.scene.add(terrain.mesh, terrain.skirt);
   const occupancy = new Occupancy();
   const osmEnv = osm ? new OsmEnvironment(track, terrain, occupancy, osm) : null;

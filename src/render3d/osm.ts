@@ -303,42 +303,18 @@ export class OsmWorld {
   }
 
   /**
-   * Signed distance to the mapped coastline (positive = out at sea), or null
-   * when the area has no coast. OSM coastlines keep the water on the right of
-   * their direction; with y pointing down that is a positive cross product,
-   * and a mirrored fit flips the handedness.
+   * Mapped coastline segments [x0, y0, x1, y1]… and the side the sea is on.
+   * OSM coastlines keep the water on the right of their direction; with y
+   * pointing down that is a positive cross product, and a mirrored fit flips
+   * the handedness.
    */
-  seaDistance(): ((x: number, y: number) => number) | null {
-    const segs: [Pt, Pt][] = [];
+  coastSegments(): { segs: Float32Array; sign: number } | null {
+    const out: number[] = [];
     for (const line of this.raw.coast) {
       const pts = line.map(([x, y]) => this.mapRaw(x, y));
-      for (let k = 1; k < pts.length; k++) segs.push([pts[k - 1], pts[k]]);
+      for (let k = 1; k < pts.length; k++) out.push(pts[k - 1].x, pts[k - 1].y, pts[k].x, pts[k].y);
     }
-    if (!segs.length) return null;
-    const mids = segs.map(([a, b]) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }));
-    const grid = new Grid(mids, 150);
-    const sign = this.mirror;
-    return (x, y) => {
-      let best = Infinity;
-      let side = 0;
-      for (const r of [300, 900, 2500]) {
-        for (const k of grid.within(x, y, r)) {
-          const [a, b] = segs[k];
-          const dx = b.x - a.x;
-          const dy = b.y - a.y;
-          const L2 = dx * dx + dy * dy || 1e-9;
-          const t = Math.max(0, Math.min(1, ((x - a.x) * dx + (y - a.y) * dy) / L2));
-          const d = Math.hypot(x - (a.x + dx * t), y - (a.y + dy * t));
-          if (d < best) {
-            best = d;
-            side = dx * (y - a.y) - dy * (x - a.x);
-          }
-        }
-        if (best < Infinity) break;
-      }
-      if (best === Infinity) return -Infinity;
-      return (side * sign > 0 ? 1 : -1) * best;
-    };
+    return out.length ? { segs: Float32Array.from(out), sign: this.mirror } : null;
   }
 
   /** Global fit + local correction only (no push): for large-scale shapes like coastlines. */

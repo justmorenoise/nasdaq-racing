@@ -7,91 +7,20 @@ import {
   PlaneGeometry,
 } from "three";
 import { CONFIG } from "../config";
-import type { Track, TrackTheme } from "../track/Track";
+import type { Track } from "../track/Track";
 import type { OsmWorld } from "./osm";
+import {
+  computeField,
+  sampleHeight,
+  smooth,
+  terrainNoise,
+  type FieldInput,
+  type FieldOutput,
+  type ThemeName,
+  type ValueNoise,
+} from "./terrainField";
 
-export function pointInPoly(poly: { x: number; y: number }[], x: number, y: number): boolean {
-  let inside = false;
-  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-    const a = poly[i];
-    const b = poly[j];
-    if (a.y > y !== b.y > y && x < ((b.x - a.x) * (y - a.y)) / (b.y - a.y) + a.x) inside = !inside;
-  }
-  return inside;
-}
-
-/** Deterministic PRNG so a circuit's landscape is the same on every visit. */
-export function mulberry32(seed: number): () => number {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-export function hashString(s: string): number {
-  let h = 2166136261;
-  for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619);
-  return h >>> 0;
-}
-
-/** Smooth value noise with a seeded lattice. */
-class ValueNoise {
-  private perm: Float32Array;
-  constructor(rand: () => number) {
-    this.perm = new Float32Array(512);
-    for (let i = 0; i < 512; i++) this.perm[i] = rand();
-  }
-  private lat(i: number, j: number): number {
-    return this.perm[(((i * 73856093) ^ (j * 19349663)) >>> 0) % 512];
-  }
-  at(x: number, y: number): number {
-    const i = Math.floor(x);
-    const j = Math.floor(y);
-    const fx = x - i;
-    const fy = y - j;
-    const sx = fx * fx * (3 - 2 * fx);
-    const sy = fy * fy * (3 - 2 * fy);
-    const a = this.lat(i, j);
-    const b = this.lat(i + 1, j);
-    const c = this.lat(i, j + 1);
-    const d = this.lat(i + 1, j + 1);
-    return (a + (b - a) * sx + (c - a) * sy + (a - b - c + d) * sx * sy) * 2 - 1;
-  }
-  fbm(x: number, y: number, oct = 4): number {
-    let s = 0;
-    let amp = 0.5;
-    let f = 1;
-    for (let o = 0; o < oct; o++) {
-      s += this.at(x * f, y * f) * amp;
-      f *= 2.03;
-      amp *= 0.5;
-    }
-    return s;
-  }
-}
-
-const smooth = (a: number, b: number, x: number) => {
-  const t = Math.max(0, Math.min(1, (x - a) / (b - a)));
-  return t * t * (3 - 2 * t);
-};
-
-interface ThemeRelief {
-  /** Hill amplitude (world units) away from the circuit. */
-  hills: number;
-  /** Extra mountain relief far from the circuit (harbour backdrop). */
-  mountains: number;
-}
-
-const RELIEF: Record<TrackTheme, ThemeRelief> = {
-  parco: { hills: 70, mountains: 0 },
-  bosco: { hills: 150, mountains: 120 },
-  citta: { hills: 35, mountains: 0 },
-  porto: { hills: 50, mountains: 520 },
-};
+export { hashString, mulberry32, pointInPoly } from "./terrainField";
 
 /** Muted, reference-matched palette (olive grass, warm dirt, grey rock). */
 const PAL = {
@@ -113,103 +42,99 @@ export interface Water {
 
 /**
  * The landscape the circuit sits in: a low-poly, flat-shaded heightfield.
- * Near the track the ground follows the track's real elevation (a harmonic
- * fill solved outward from the track corridor, kept just under the asphalt and
- * under the lower pass at crossovers); further out themed hills, forested
- * ridges or a harbour's mountain backdrop take over. `heightAt` lets every
- * other layer stand its objects on the ground.
+ * The heights are computed by `terrainField.ts` — in a Web Worker when
+ * available, so the loading screen stays alive — and this class turns them
+ * into the mesh and answers queries (`heightAt`, `trackDistance`,
+ * `shoreDistance`) for every other layer; `flattenRoads` terraces streets.
  */
 export class Terrain {
   readonly mesh: Mesh;
-  private noise!: ValueNoise;
-  private fixedMask!: Uint8Array;
   readonly skirt: Mesh;
   readonly water: Water | null = null;
+  readonly corridor: number;
+  /** Distance of each node to the centerline (approximate EDT). */
+  readonly dist: Float32Array;
+  /** Inland water bodies (OSM), each with its surface level. */
+  readonly lakes: { poly: { x: number; y: number }[]; level: number }[];
   private x0: number;
   private y0: number;
   private cell: number;
   private nx: number;
   private ny: number;
   private hgt: Float32Array;
-  /** Distance of each node to the centerline (approximate EDT). */
-  readonly dist: Float32Array;
-  private faceCenters: Float32Array;
-  private colors: Float32Array;
-  readonly corridor: number;
-  /** Height the grid's border settles to (and the horizon skirt sits at). */
-  private rimH = 0;
+  private fixedMask: Uint8Array;
+  private seaDist: Float32Array | null;
+  private seaSide: FieldOutput["seaSide"];
+  private rimH: number;
+  private noise: ValueNoise;
+  private faceCenters!: Float32Array;
+  private colors!: Float32Array;
 
-  /** Inland water bodies (OSM), each with its surface level. */
-  readonly lakes: { poly: { x: number; y: number }[]; level: number }[] = [];
-  private shoreFn: ((x: number, y: number) => number) | null = null;
+  /** Build the terrain for a track, computing the heights off the main thread. */
+  static async create(track: Track, osm: OsmWorld | null): Promise<Terrain> {
+    const n = track.samples.length - 1;
+    const samples = new Float32Array(n * 4);
+    for (let i = 0; i < n; i++) {
+      const p = track.samples[i];
+      samples.set([p.x, p.y, p.h, p.dist], i * 4);
+    }
+    const coast = osm?.coastSegments() ?? null;
+    const input: FieldInput = {
+      id: track.def.id,
+      theme: (track.def.theme ?? "parco") as ThemeName,
+      width: track.def.width,
+      runOff: CONFIG.scenery.runOffWidth,
+      bounds: { ...track.bounds },
+      samples,
+      length: track.length,
+      coast: coast?.segs ?? null,
+      seaSign: coast?.sign ?? 1,
+      lakes: osm ? osm.lakes().map((poly) => Float32Array.from(poly.flatMap((p) => [p.x, p.y]))) : [],
+    };
+    let field: FieldOutput;
+    try {
+      field = await new Promise<FieldOutput>((resolve, reject) => {
+        const w = new Worker(new URL("./terrainWorker.ts", import.meta.url), { type: "module" });
+        w.onmessage = (e) => {
+          resolve(e.data as FieldOutput);
+          w.terminate();
+        };
+        w.onerror = (e) => {
+          reject(e);
+          w.terminate();
+        };
+        w.postMessage(input);
+      });
+    } catch {
+      field = computeField(input);
+    }
+    return new Terrain(track, field);
+  }
 
-  constructor(
+  private constructor(
     private track: Track,
-    osm: OsmWorld | null = null,
+    f: FieldOutput,
   ) {
-    const b = track.bounds;
-    const span = Math.max(b.maxX - b.minX, b.maxY - b.minY);
-    const margin = Math.max(2200, span * 0.9);
-    this.cell = Math.min(40, Math.max(14, span / 220));
-    this.x0 = b.minX - margin;
-    this.y0 = b.minY - margin;
-    this.nx = Math.ceil((b.maxX - b.minX + margin * 2) / this.cell) + 1;
-    this.ny = Math.ceil((b.maxY - b.minY + margin * 2) / this.cell) + 1;
-    const N = this.nx * this.ny;
-    this.hgt = new Float32Array(N);
-    this.dist = new Float32Array(N);
-    this.corridor = track.def.width / 2 + CONFIG.scenery.runOffWidth + 22;
-
-    const theme = track.def.theme ?? "parco";
-    const rand = mulberry32(hashString(track.def.id + ":terrain"));
-    const noise = new ValueNoise(rand);
-
-    const nearest = this.featureTransform();
-    const fixed = this.trackFloor(nearest);
-    this.relax(fixed);
-
-    // The sea: the real coastline when OSM has one, else (harbour theme) the
-    // side of the circuit that hugs its bounds.
-    const coast = osm?.seaDistance() ?? null;
-    if (coast) {
-      this.buildSeaMask(coast);
-      this.shoreFn = (x, y) => this.seaLookup(x, y);
-      this.water = { level: this.minTrackH() - 4, contains: (x, y) => this.shoreDistance(x, y) > 0 };
-    }
-    else if (theme === "porto") this.water = this.makeSea();
-
-    const relief = RELIEF[theme];
-    for (let j = 0; j < this.ny; j++) {
-      for (let i = 0; i < this.nx; i++) {
-        const k = j * this.nx + i;
-        if (fixed[k]) continue;
-        const x = this.x0 + i * this.cell;
-        const y = this.y0 + j * this.cell;
-        const d = this.dist[k];
-        const w = smooth(this.corridor, this.corridor + 520, d);
-        let h = this.hgt[k] + noise.fbm(x / 1400, y / 1400) * relief.hills * w;
-        if (relief.mountains) {
-          const far = smooth(900, 3200, d);
-          const ridge = 1 - Math.abs(noise.fbm(x / 1700 + 11, y / 1700 - 7, 5));
-          h += ridge * ridge * relief.mountains * far;
-        }
-        if (this.water) {
-          const s = this.shoreDistance(x, y);
-          // Heuristic coasts get a gentle shore ramp; a real (OSM) coast keeps
-          // the land's own shape right down to the water's edge.
-          if (!this.shoreFn && s > -260) h = Math.min(h, this.water.level + 6 + Math.max(0, -s) * 0.12);
-          if (this.shoreFn && s > -30) h = Math.min(h, this.water.level + 3 + Math.max(0, -s) * 0.6);
-          if (s > 0) h = Math.min(h, this.water.level - 8 - s * 0.2);
-        }
-        this.hgt[k] = h;
-      }
-    }
-
-    if (osm) this.carveLakes(osm, fixed);
-    this.rimH = this.blendRim(fixed);
-    this.noise = noise;
-    this.fixedMask = fixed;
-    const built = this.buildMesh(noise);
+    this.x0 = f.x0;
+    this.y0 = f.y0;
+    this.cell = f.cell;
+    this.nx = f.nx;
+    this.ny = f.ny;
+    this.corridor = f.corridor;
+    this.hgt = f.hgt;
+    this.dist = f.dist;
+    this.fixedMask = f.fixed;
+    this.seaDist = f.seaDist;
+    this.seaSide = f.seaSide;
+    this.rimH = f.rimH;
+    this.lakes = f.lakes.map((l) => {
+      const poly: { x: number; y: number }[] = [];
+      for (let q = 0; q < l.poly.length; q += 2) poly.push({ x: l.poly[q], y: l.poly[q + 1] });
+      return { poly, level: l.level };
+    });
+    if (f.waterLevel !== null) this.water = { level: f.waterLevel, contains: (x, y) => this.shoreDistance(x, y) > 0 };
+    this.noise = terrainNoise(track.def.id);
+    const built = this.buildMesh(this.noise);
     this.mesh = built.mesh;
     this.faceCenters = built.centers;
     this.colors = built.colors;
@@ -220,267 +145,13 @@ export class Terrain {
     return j * this.nx + i;
   }
 
-  /**
-   * Approximate Euclidean distance transform with nearest-feature propagation:
-   * each track sample seeds its grid node, then two chamfer sweeps carry the
-   * nearest sample index across the grid.
-   */
-  private featureTransform(): Int32Array {
-    const { nx, ny, cell } = this;
-    const s = this.track.samples;
-    const near = new Int32Array(nx * ny).fill(-1);
-    this.dist.fill(Infinity);
-    const nodeDist = (k: number, si: number) => {
-      const i = k % nx;
-      const j = (k - i) / nx;
-      return Math.hypot(this.x0 + i * cell - s[si].x, this.y0 + j * cell - s[si].y);
-    };
-    for (let si = 0; si < s.length - 1; si++) {
-      const i = Math.round((s[si].x - this.x0) / cell);
-      const j = Math.round((s[si].y - this.y0) / cell);
-      const k = this.idx(i, j);
-      const d = nodeDist(k, si);
-      if (d < this.dist[k]) {
-        this.dist[k] = d;
-        near[k] = si;
-      }
-    }
-    const relaxFrom = (k: number, n: number) => {
-      const si = near[n];
-      if (si < 0) return;
-      const d = nodeDist(k, si);
-      if (d < this.dist[k]) {
-        this.dist[k] = d;
-        near[k] = si;
-      }
-    };
-    for (let pass = 0; pass < 2; pass++) {
-      for (let j = 0; j < ny; j++) {
-        for (let i = 0; i < nx; i++) {
-          const k = this.idx(i, j);
-          if (i > 0) relaxFrom(k, k - 1);
-          if (j > 0) {
-            relaxFrom(k, k - nx);
-            if (i > 0) relaxFrom(k, k - nx - 1);
-            if (i < nx - 1) relaxFrom(k, k - nx + 1);
-          }
-        }
-      }
-      for (let j = ny - 1; j >= 0; j--) {
-        for (let i = nx - 1; i >= 0; i--) {
-          const k = this.idx(i, j);
-          if (i < nx - 1) relaxFrom(k, k + 1);
-          if (j < ny - 1) {
-            relaxFrom(k, k + nx);
-            if (i < nx - 1) relaxFrom(k, k + nx + 1);
-            if (i > 0) relaxFrom(k, k + nx - 1);
-          }
-        }
-      }
-    }
-    return near;
-  }
-
-  /**
-   * Nodes inside the track corridor are pinned just below the track surface —
-   * below the *lowest* pass nearby, so an overpass never gets buried.
-   */
-  private trackFloor(near: Int32Array): Uint8Array {
-    const fixed = new Uint8Array(this.nx * this.ny);
-    const s = this.track.samples;
-    const r2 = this.corridor * this.corridor;
-    const L = this.track.length;
-    const roadR = this.track.def.width / 2 + 14;
-    const roadR2 = roadR * roadR;
-    // Bucket samples for the crossover check.
-    const bucket = new Map<string, number[]>();
-    const bc = this.corridor;
-    s.forEach((p, i) => {
-      const key = `${Math.floor(p.x / bc)},${Math.floor(p.y / bc)}`;
-      const l = bucket.get(key) ?? [];
-      l.push(i);
-      bucket.set(key, l);
-    });
-    for (let k = 0; k < fixed.length; k++) {
-      if (this.dist[k] >= this.corridor || near[k] < 0) continue;
-      const i = k % this.nx;
-      const j = (k - i) / this.nx;
-      const x = this.x0 + i * this.cell;
-      const y = this.y0 + j * this.cell;
-      // The ground beside the road sits level with it (a road is flat across).
-      // Only where a *different* stretch of track passes nearby (a crossover
-      // or a parallel pass at another level) does the lower one win, so an
-      // overpass never buries the road beneath it.
-      const own = s[near[k]];
-      let h = own.h;
-      let foreignNear = false;
-      const bx = Math.floor(x / bc);
-      const by = Math.floor(y / bc);
-      for (let a = -1; a <= 1; a++) {
-        for (let c = -1; c <= 1; c++) {
-          for (const si of bucket.get(`${bx + a},${by + c}`) ?? []) {
-            const q = s[si];
-            const da = Math.abs(q.dist - own.dist);
-            if (Math.min(da, L - da) < this.corridor * 3) continue;
-            const dx = q.x - x;
-            const dy = q.y - y;
-            if (dx * dx + dy * dy < r2) foreignNear = true;
-            // Only under/over the other road itself (a crossover): elsewhere each
-            // pass keeps its own level and the land between them slopes.
-            if (dx * dx + dy * dy < roadR2) h = Math.min(h, q.h);
-          }
-        }
-      }
-      // Between two passes at different levels, leave the verge free so the
-      // harmonic fill slopes it from one road down to the other.
-      if (foreignNear && this.dist[k] > roadR && Math.abs(h - own.h) < 0.01) continue;
-      this.hgt[k] = h - 0.9;
-      fixed[k] = 1;
-    }
-    return fixed;
-  }
-
-  /** Harmonic fill of the free nodes (SOR), so the land flows out of the track. */
-  private relax(fixed: Uint8Array): void {
-    const { nx, ny } = this;
-    let sum = 0;
-    let n = 0;
-    for (let k = 0; k < fixed.length; k++) {
-      if (fixed[k]) {
-        sum += this.hgt[k];
-        n++;
-      }
-    }
-    const mean = n ? sum / n : 0;
-    for (let k = 0; k < fixed.length; k++) if (!fixed[k]) this.hgt[k] = mean;
-    const w = 1.85;
-    for (let it = 0; it < 260; it++) {
-      for (let j = 0; j < ny; j++) {
-        for (let i = 0; i < nx; i++) {
-          const k = j * nx + i;
-          if (fixed[k]) continue;
-          const l = this.hgt[i > 0 ? k - 1 : k + 1];
-          const r = this.hgt[i < nx - 1 ? k + 1 : k - 1];
-          const u = this.hgt[j > 0 ? k - nx : k + nx];
-          const d = this.hgt[j < ny - 1 ? k + nx : k - nx];
-          const avg = (l + r + u + d) / 4;
-          this.hgt[k] += w * (avg - this.hgt[k]);
-        }
-      }
-    }
-  }
-
-  private seaSide: { horizontal: boolean; dir: number; shore: number } | null = null;
-
-  private makeSea(): Water {
-    const b = this.track.bounds;
-    const s = this.track.samples;
-    const spanX = b.maxX - b.minX;
-    const spanY = b.maxY - b.minY;
-    const near = (v: number, edge: number, span: number) => Math.abs(v - edge) < span * 0.1;
-    const counts = {
-      minX: s.filter((p) => near(p.x, b.minX, spanX)).length,
-      maxX: s.filter((p) => near(p.x, b.maxX, spanX)).length,
-      minY: s.filter((p) => near(p.y, b.minY, spanY)).length,
-      maxY: s.filter((p) => near(p.y, b.maxY, spanY)).length,
-    };
-    const side = (Object.keys(counts) as (keyof typeof counts)[]).reduce((a, k) => (counts[k] > counts[a] ? k : a));
-    const gap = 150;
-    const horizontal = side === "minY" || side === "maxY";
-    const dir = side === "minX" || side === "minY" ? -1 : 1;
-    const shore = side === "minX" ? b.minX - gap : side === "maxX" ? b.maxX + gap : side === "minY" ? b.minY - gap : b.maxY + gap;
-    this.seaSide = { horizontal, dir, shore };
-    const level = Math.min(...s.map((p) => p.h)) - 10;
-    return { level, contains: (x, y) => this.shoreDistance(x, y) > 0 };
-  }
-
-  private seaDist: Float32Array | null = null;
-
-  /**
-   * Classify every node as sea or land from the coastline, keeping only the
-   * sea that is connected to open water (flood fill from nodes far out at
-   * sea) and never within reach of the track: nearest-segment side tests are
-   * noisy around coastline ends, piers and harbour walls.
-   */
-  private buildSeaMask(coast: (x: number, y: number) => number): void {
-    const { nx, ny } = this;
-    const raw = new Float32Array(nx * ny);
-    for (let j = 0; j < ny; j++) {
-      for (let i = 0; i < nx; i++) {
-        const k = this.idx(i, j);
-        raw[k] = this.dist[k] < this.corridor + 20 ? -1 : coast(this.x0 + i * this.cell, this.y0 + j * this.cell);
-      }
-    }
-    const sea = new Uint8Array(nx * ny);
-    const stack: number[] = [];
-    for (let k = 0; k < raw.length; k++) {
-      if (raw[k] > 350) {
-        sea[k] = 1;
-        stack.push(k);
-      }
-    }
-    while (stack.length) {
-      const k = stack.pop()!;
-      const i = k % nx;
-      const j = (k - i) / nx;
-      for (const [a, b] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
-        const ii = i + a;
-        const jj = j + b;
-        if (ii < 0 || jj < 0 || ii >= nx || jj >= ny) continue;
-        const n = this.idx(ii, jj);
-        if (sea[n] || raw[n] <= 0) continue;
-        sea[n] = 1;
-        stack.push(n);
-      }
-    }
-    this.seaDist = new Float32Array(nx * ny);
-    for (let k = 0; k < raw.length; k++) this.seaDist[k] = sea[k] ? Math.max(1, raw[k]) : Math.min(-1, raw[k] > 0 ? -1 : raw[k]);
-  }
-
-  private seaLookup(x: number, y: number): number {
-    const i = Math.round(Math.max(0, Math.min(this.nx - 1, (x - this.x0) / this.cell)));
-    const j = Math.round(Math.max(0, Math.min(this.ny - 1, (y - this.y0) / this.cell)));
-    return this.seaDist![this.idx(i, j)];
-  }
-
-  private minTrackH(): number {
-    let m = Infinity;
-    for (const p of this.track.samples) m = Math.min(m, p.h);
-    return m;
-  }
-
-  /** Sink inland water bodies to a level just under their lowest shore. */
-  private carveLakes(osm: OsmWorld, fixed: Uint8Array): void {
-    for (const poly of osm.lakes()) {
-      if (poly.length < 3) continue;
-      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-      let level = Infinity;
-      for (const p of poly) {
-        x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y); x1 = Math.max(x1, p.x); y1 = Math.max(y1, p.y);
-        level = Math.min(level, this.heightAt(p.x, p.y));
-      }
-      level -= 1.5;
-      let carved = 0;
-      const i0 = Math.max(0, Math.floor((x0 - this.x0) / this.cell));
-      const i1 = Math.min(this.nx - 1, Math.ceil((x1 - this.x0) / this.cell));
-      const j0 = Math.max(0, Math.floor((y0 - this.y0) / this.cell));
-      const j1 = Math.min(this.ny - 1, Math.ceil((y1 - this.y0) / this.cell));
-      for (let j = j0; j <= j1; j++) {
-        for (let i = i0; i <= i1; i++) {
-          const k = this.idx(i, j);
-          if (fixed[k]) continue;
-          if (!pointInPoly(poly, this.x0 + i * this.cell, this.y0 + j * this.cell)) continue;
-          this.hgt[k] = Math.min(this.hgt[k], level - 4);
-          carved++;
-        }
-      }
-      if (carved) this.lakes.push({ poly, level });
-    }
-  }
-
   /** Signed distance past the shoreline (positive = out at sea). */
   shoreDistance(x: number, y: number): number {
-    if (this.shoreFn) return this.shoreFn(x, y);
+    if (this.seaDist) {
+      const i = Math.round(Math.max(0, Math.min(this.nx - 1, (x - this.x0) / this.cell)));
+      const j = Math.round(Math.max(0, Math.min(this.ny - 1, (y - this.y0) / this.cell)));
+      return this.seaDist[this.idx(i, j)];
+    }
     const s = this.seaSide;
     if (!s) return -Infinity;
     return ((s.horizontal ? y : x) - s.shore) * s.dir;
@@ -492,27 +163,10 @@ export class Terrain {
 
   /**
    * Ground height at a point, interpolated on the very triangles the mesh
-   * draws (same diagonal per cell), so anything placed with it sits exactly
-   * on the visible surface; clamped at the grid edges.
+   * draws, so anything placed with it sits exactly on the visible surface.
    */
   heightAt(x: number, y: number): number {
-    const fx = Math.max(0, Math.min(this.nx - 1.001, (x - this.x0) / this.cell));
-    const fy = Math.max(0, Math.min(this.ny - 1.001, (y - this.y0) / this.cell));
-    const i = Math.floor(fx);
-    const j = Math.floor(fy);
-    const tx = fx - i;
-    const ty = fy - j;
-    const k = this.idx(i, j);
-    const h00 = this.hgt[k];
-    const h10 = this.hgt[k + 1];
-    const h01 = this.hgt[k + this.nx];
-    const h11 = this.hgt[k + this.nx + 1];
-    if ((i + j) % 2) {
-      // Diagonal p00–p11.
-      return tx >= ty ? h00 + (h10 - h00) * tx + (h11 - h10) * ty : h00 + (h01 - h00) * ty + (h11 - h01) * tx;
-    }
-    // Diagonal p10–p01.
-    return tx + ty <= 1 ? h00 + (h10 - h00) * tx + (h01 - h00) * ty : h11 + (h01 - h11) * (1 - tx) + (h10 - h11) * (1 - ty);
+    return sampleHeight(this.hgt, this.nx, this.ny, this.x0, this.y0, this.cell, x, y);
   }
 
   /** Distance to the centerline at a point (from the grid EDT). */
@@ -657,28 +311,6 @@ export class Terrain {
       for (let v = 0; v < 3; v++) this.colors.set([c.r, c.g, c.b], t * 9 + v * 3);
     }
     (this.mesh.geometry.getAttribute("color") as Float32BufferAttribute).needsUpdate = true;
-  }
-
-  /**
-   * Ease the outer band of the grid down to one rim height, so the flat horizon
-   * skirt meets it seamlessly (a skirt at an arbitrary level would cut through
-   * the landscape and bury low stretches of the track).
-   */
-  private blendRim(fixed: Uint8Array): number {
-    let lo = Infinity;
-    for (let k = 0; k < this.hgt.length; k++) if (fixed[k]) lo = Math.min(lo, this.hgt[k]);
-    const rim = (this.water ? this.water.level : lo) - 25;
-    const band = 30;
-    for (let j = 0; j < this.ny; j++) {
-      for (let i = 0; i < this.nx; i++) {
-        const e = Math.min(i, j, this.nx - 1 - i, this.ny - 1 - j);
-        if (e >= band) continue;
-        const k = this.idx(i, j);
-        const t = smooth(0, band, e);
-        this.hgt[k] = rim + (this.hgt[k] - rim) * t;
-      }
-    }
-    return rim;
   }
 
   /** A huge flat plane at the rim height so the tilted camera never sees the edge. */
