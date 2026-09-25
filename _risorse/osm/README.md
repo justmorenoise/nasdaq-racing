@@ -7,5 +7,10 @@ Rigenerazione (i file raw non sono versionati):
 2. Scarica la relazione del circuito:
    `[out:json];relation(around:R,LAT,LON)[type=circuit];out geom;` → `raw/<slug>.circuit.json`.
 3. `python3 process.py` → `public/osm/<slug>.json`.
+4. Geometria reale del tracciato: in `~/dev/fastf1_work` esegui `geometry.py` (giro più veloce in qualifica
+   di Fast-F1 → `raw/<slug>.f1.json`), poi qui `~/dev/fastf1_work/venv/bin/python track.py` →
+   `public/osm/<slug>.track.json` (linea centrale OSM ogni 3 m dalla linea del traguardo nel senso di marcia,
+   pit lane, curve ufficiali). Il gioco la usa al posto dell'SVG, a `UNITS_PER_METRE` unità per metro,
+   con la larghezza reale `larghezza_metri` di circuits.json.
 
 Il gioco allinea i dati al tracciato disegnato a runtime (`src/render3d/osm.ts`).

@@ -27,7 +27,7 @@ export const CONFIG = {
    * (animating overtakes) while the corner speed profile still applies.
    */
   pace: {
-    baseGapFrac: 0.02, // lap-fraction of spacing between adjacent cars (readability)
+    baseGapCars: 4, // car lengths of spacing between adjacent cars (readability)
     gapPerPctFrac: 0.03, // extra lap-fraction of spacing per 1% of standings gap
     gain: 6, // controller gain toward the target slot (higher = snappier)
     minMul: 0.3, // clamp on the pace multiplier (slowest)
@@ -103,8 +103,8 @@ export const CONFIG = {
     contactLatUnits: 13,
     /** Below this normalized intensity [0,1] no sparks are emitted. */
     minIntensity: 0.12,
-    /** Closing speed (world units/s) that maps to full intensity. */
-    fullClosingSpeed: 90,
+    /** Closing speed (m/s) that maps to full intensity. */
+    fullClosingSpeed: 25,
     /** Particles emitted at full intensity (scaled down for softer touches). */
     particleCount: 14,
     /** Per-event cooldown so a sustained scrape doesn't spam (seconds). */

@@ -62,7 +62,9 @@ export class OsmEnvironment {
     private osm: OsmWorld,
   ) {
     this.rand = mulberry32(hashString(track.def.id + ":osm"));
-    this.k = Math.max(osm.scale * 1.3, 1.9);
+    // On a real-scale track the town is near true scale too; on a stylised
+    // drawing it's enlarged to read next to the oversized cars.
+    this.k = track.def.realGeometry ? osm.scale * 1.1 : Math.max(osm.scale * 1.3, 1.9);
   }
 
   /** Phase 1, before the trackside is built: terrace the ground under the streets. */
@@ -137,7 +139,7 @@ export class OsmEnvironment {
     const all: { run: Pt[]; w: number; wm: number }[] = [];
     for (const r of this.osm.raw.roads) {
       if (r.w < 5) continue; // service alleys clutter the stylised town
-      const w = Math.min(24, r.w * this.k * 0.85);
+      const w = Math.min(this.track.def.realGeometry ? 14 * this.k : 24, r.w * this.k * 0.85);
       const mapped = this.osm.mapLine(r.p, w / 2 + 8);
       for (const run of this.runs(mapped, 14)) all.push({ run, w, wm: r.w });
     }
@@ -260,7 +262,7 @@ export class OsmEnvironment {
         }
       }
       const spec = BLD[name];
-      const foot = Math.min(1.5, Math.max(0.6, Math.sqrt(area) * this.k / (Math.sqrt(spec.w * spec.d) * PROP_SCALE)));
+      const foot = Math.min(this.track.def.realGeometry ? 2.4 : 1.5, Math.max(0.6, Math.sqrt(area) * this.k / (Math.sqrt(spec.w * spec.d) * PROP_SCALE)));
       const height = Math.min(1.7, Math.max(0.7, (levels * 3.1) / spec.h)) * foot;
       const r = (Math.hypot(spec.w, spec.d) / 2) * PROP_SCALE * foot * 0.62;
       if (!this.occ.free(box.x, box.y, r)) continue;

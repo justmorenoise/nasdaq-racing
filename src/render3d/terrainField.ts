@@ -22,6 +22,8 @@ export interface FieldInput {
   seaSign: number;
   /** Mapped inland water polygons, each flattened [x, y, …]. */
   lakes: Float32Array[];
+  /** World units per landscape unit (≈ metre): the relief's wavelengths and heights scale with it. */
+  unit: number;
 }
 
 export interface FieldOutput {
@@ -146,7 +148,8 @@ export function sampleHeight(hgt: Float32Array, nx: number, ny: number, x0: numb
 export function computeField(inp: FieldInput): FieldOutput {
   const b = inp.bounds;
   const span = Math.max(b.maxX - b.minX, b.maxY - b.minY);
-  const margin = Math.max(2200, span * 0.9);
+  const U = inp.unit;
+  const margin = Math.max(2200 * Math.min(U, 2.5), span * 0.9);
   const cell = Math.min(40, Math.max(14, span / 220));
   const x0 = b.minX - margin;
   const y0 = b.minY - margin;
@@ -254,30 +257,9 @@ export function computeField(inp: FieldInput): FieldOutput {
     fixed[k] = 1;
   }
 
-  // 3. Harmonic fill (SOR) of the free nodes.
-  {
-    let sum = 0;
-    let n = 0;
-    for (let k = 0; k < N; k++) if (fixed[k]) {
-      sum += hgt[k];
-      n++;
-    }
-    const mean = n ? sum / n : 0;
-    for (let k = 0; k < N; k++) if (!fixed[k]) hgt[k] = mean;
-    for (let it = 0; it < 260; it++) {
-      for (let j = 0; j < ny; j++) {
-        for (let i = 0; i < nx; i++) {
-          const k = j * nx + i;
-          if (fixed[k]) continue;
-          const l = hgt[i > 0 ? k - 1 : k + 1];
-          const r = hgt[i < nx - 1 ? k + 1 : k - 1];
-          const u = hgt[j > 0 ? k - nx : k + nx];
-          const d = hgt[j < ny - 1 ? k + nx : k - nx];
-          hgt[k] += 1.85 * ((l + r + u + d) / 4 - hgt[k]);
-        }
-      }
-    }
-  }
+  // 3. Harmonic fill of the free nodes: coarse-to-fine SOR (plain SOR on the
+  //    full grid needs hundreds of sweeps to carry the corridor's heights out).
+  harmonicFill(hgt, fixed, nx, ny);
 
   let minH = Infinity;
   for (let i = 0; i < ns; i++) minH = Math.min(minH, sh(i));
@@ -309,16 +291,16 @@ export function computeField(inp: FieldInput): FieldOutput {
       const x = x0 + i * cell;
       const y = y0 + j * cell;
       const d = dist[k];
-      const w = smooth(corridor, corridor + 520, d);
-      let h = hgt[k] + noise.fbm(x / 1400, y / 1400) * relief.hills * w;
+      const w = smooth(corridor, corridor + 520 * U, d);
+      let h = hgt[k] + noise.fbm(x / (1400 * U), y / (1400 * U)) * relief.hills * U * w;
       if (relief.mountains) {
-        const far = smooth(900, 3200, d);
-        const ridge = 1 - Math.abs(noise.fbm(x / 1700 + 11, y / 1700 - 7, 5));
-        h += ridge * ridge * relief.mountains * far;
+        const far = smooth(900 * U, 3200 * U, d);
+        const ridge = 1 - Math.abs(noise.fbm(x / (1700 * U) + 11, y / (1700 * U) - 7, 5));
+        h += ridge * ridge * relief.mountains * U * far;
       }
       if (waterLevel !== null) {
         const s = shore(x, y, k);
-        if (!seaDist && s > -260) h = Math.min(h, waterLevel + 6 + Math.max(0, -s) * 0.12);
+        if (!seaDist && s > -260 * U) h = Math.min(h, waterLevel + 6 + Math.max(0, -s) * 0.12);
         if (seaDist && s > -30) h = Math.min(h, waterLevel + 3 + Math.max(0, -s) * 0.6);
         if (s > 0) h = Math.min(h, waterLevel - 8 - s * 0.2);
       }
@@ -375,8 +357,7 @@ export function computeField(inp: FieldInput): FieldOutput {
 /**
  * Signed distance past the mapped coastline per node, keeping only sea
  * connected to open water (flood fill from far offshore) and never near the
- * track. The nearest-segment test is costly, so it runs on a lattice every
- * `STRIDE` nodes and is interpolated in between.
+ * track.
  */
 function seaMask(
   coast: Float32Array,
@@ -389,71 +370,88 @@ function seaMask(
   dist: Float32Array,
   corridor: number,
 ): Float32Array {
-  const segs = coast.length / 4;
-  const gcell = 150;
-  const grid = new Map<string, number[]>();
-  for (let s = 0; s < segs; s++) {
-    const mx = (coast[s * 4] + coast[s * 4 + 2]) / 2;
-    const my = (coast[s * 4 + 1] + coast[s * 4 + 3]) / 2;
-    const key = `${Math.floor(mx / gcell)},${Math.floor(my / gcell)}`;
-    const l = grid.get(key) ?? [];
-    l.push(s);
-    grid.set(key, l);
-  }
-  const signed = (x: number, y: number): number => {
-    let best = Infinity;
-    let side = 0;
-    for (const r of [2, 6, 17]) {
-      const ci = Math.floor(x / gcell);
-      const cj = Math.floor(y / gcell);
-      for (let a = -r; a <= r; a++) {
-        for (let b = -r; b <= r; b++) {
-          for (const s of grid.get(`${ci + a},${cj + b}`) ?? []) {
-            const ax = coast[s * 4], ay = coast[s * 4 + 1];
-            const dx = coast[s * 4 + 2] - ax, dy = coast[s * 4 + 3] - ay;
-            const L2 = dx * dx + dy * dy || 1e-9;
-            const t = Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / L2));
-            const d = Math.hypot(x - ax - dx * t, y - ay - dy * t);
-            if (d < best) {
-              best = d;
-              side = dx * (y - ay) - dy * (x - ax);
-            }
-          }
+  // Signed distance to the nearest coast segment on every node: exact near the
+  // coast, then carried outward by nearest-segment propagation (two chamfer
+  // sweeps, as for the track), so the cost is linear in the grid.
+  const N = nx * ny;
+  const near = new Int32Array(N).fill(-1);
+  const d2 = new Float32Array(N).fill(Infinity);
+  const segDist2 = (k: number, s: number): number => {
+    const i = k % nx;
+    const x = x0 + i * cell;
+    const y = y0 + ((k - i) / nx) * cell;
+    const ax = coast[s * 4], ay = coast[s * 4 + 1];
+    const dx = coast[s * 4 + 2] - ax, dy = coast[s * 4 + 3] - ay;
+    const t = Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / (dx * dx + dy * dy || 1e-9)));
+    return (x - ax - dx * t) ** 2 + (y - ay - dy * t) ** 2;
+  };
+  for (let s = 0; s < coast.length / 4; s++) {
+    const ax = coast[s * 4], ay = coast[s * 4 + 1], bx = coast[s * 4 + 2], by = coast[s * 4 + 3];
+    const i0 = Math.max(0, Math.floor((Math.min(ax, bx) - x0) / cell) - 1);
+    const i1 = Math.min(nx - 1, Math.ceil((Math.max(ax, bx) - x0) / cell) + 1);
+    const j0 = Math.max(0, Math.floor((Math.min(ay, by) - y0) / cell) - 1);
+    const j1 = Math.min(ny - 1, Math.ceil((Math.max(ay, by) - y0) / cell) + 1);
+    for (let j = j0; j <= j1; j++) {
+      for (let i = i0; i <= i1; i++) {
+        const k = j * nx + i;
+        const d = segDist2(k, s);
+        if (d < d2[k] && d < (cell * 2) ** 2) {
+          d2[k] = d;
+          near[k] = s;
         }
       }
-      if (best < Infinity) break;
-    }
-    if (best === Infinity) return -1e6;
-    return (side * sign > 0 ? 1 : -1) * best;
-  };
-
-  const STRIDE = 3;
-  const cx = Math.ceil((nx - 1) / STRIDE) + 1;
-  const cy = Math.ceil((ny - 1) / STRIDE) + 1;
-  const coarse = new Float32Array(cx * cy);
-  for (let j = 0; j < cy; j++) {
-    for (let i = 0; i < cx; i++) {
-      coarse[j * cx + i] = signed(x0 + Math.min(nx - 1, i * STRIDE) * cell, y0 + Math.min(ny - 1, j * STRIDE) * cell);
     }
   }
-  const raw = new Float32Array(nx * ny);
-  for (let j = 0; j < ny; j++) {
-    for (let i = 0; i < nx; i++) {
-      const k = j * nx + i;
-      if (dist[k] < corridor + 20) {
-        raw[k] = -1;
-        continue;
-      }
-      const fx = i / STRIDE;
-      const fy = j / STRIDE;
-      const ci = Math.min(cx - 2, Math.floor(fx));
-      const cj = Math.min(cy - 2, Math.floor(fy));
-      const tx = fx - ci;
-      const ty = fy - cj;
-      const a = coarse[cj * cx + ci], b = coarse[cj * cx + ci + 1];
-      const c = coarse[(cj + 1) * cx + ci], d = coarse[(cj + 1) * cx + ci + 1];
-      raw[k] = a + (b - a) * tx + (c - a) * ty + (a - b - c + d) * tx * ty;
+  const relax = (k: number, n: number) => {
+    const s = near[n];
+    if (s < 0) return;
+    const d = segDist2(k, s);
+    if (d < d2[k]) {
+      d2[k] = d;
+      near[k] = s;
     }
+  };
+  for (let pass = 0; pass < 2; pass++) {
+    for (let j = 0; j < ny; j++) {
+      for (let i = 0; i < nx; i++) {
+        const k = j * nx + i;
+        if (i > 0) relax(k, k - 1);
+        if (j > 0) {
+          relax(k, k - nx);
+          if (i > 0) relax(k, k - nx - 1);
+          if (i < nx - 1) relax(k, k - nx + 1);
+        }
+      }
+    }
+    for (let j = ny - 1; j >= 0; j--) {
+      for (let i = nx - 1; i >= 0; i--) {
+        const k = j * nx + i;
+        if (i < nx - 1) relax(k, k + 1);
+        if (j < ny - 1) {
+          relax(k, k + nx);
+          if (i < nx - 1) relax(k, k + nx + 1);
+          if (i > 0) relax(k, k + nx - 1);
+        }
+      }
+    }
+  }
+  const raw = new Float32Array(N);
+  for (let k = 0; k < N; k++) {
+    const s = near[k];
+    if (s < 0) {
+      raw[k] = -1e6;
+      continue;
+    }
+    if (dist[k] < corridor + 20) {
+      raw[k] = -1;
+      continue;
+    }
+    const i = k % nx;
+    const x = x0 + i * cell;
+    const y = y0 + ((k - i) / nx) * cell;
+    const ax = coast[s * 4], ay = coast[s * 4 + 1];
+    const side = (coast[s * 4 + 2] - ax) * (y - ay) - (coast[s * 4 + 3] - ay) * (x - ax);
+    raw[k] = (side * sign > 0 ? 1 : -1) * Math.sqrt(d2[k]);
   }
   const sea = new Uint8Array(nx * ny);
   const stack: number[] = [];
@@ -478,6 +476,73 @@ function seaMask(
   const out = new Float32Array(nx * ny);
   for (let k = 0; k < raw.length; k++) out[k] = sea[k] ? Math.max(1, raw[k]) : Math.min(-1, raw[k] > 0 ? -1 : raw[k]);
   return out;
+}
+
+/**
+ * Fill the free (non-fixed) nodes with a harmonic interpolation of the fixed
+ * ones: solve on a grid 4× coarser (a fixed coarse node takes the mean of the
+ * fixed nodes in its block), then start the full grid from its bilinear
+ * upsampling and finish with a few SOR sweeps.
+ */
+function harmonicFill(hgt: Float32Array, fixed: Uint8Array, nx: number, ny: number): void {
+  const sor = (h: Float32Array, fx: Uint8Array, w: number, hh: number, iters: number) => {
+    for (let it = 0; it < iters; it++) {
+      for (let j = 0; j < hh; j++) {
+        for (let i = 0; i < w; i++) {
+          const k = j * w + i;
+          if (fx[k]) continue;
+          const l = h[i > 0 ? k - 1 : k + 1];
+          const r = h[i < w - 1 ? k + 1 : k - 1];
+          const u = h[j > 0 ? k - w : k + w];
+          const d = h[j < hh - 1 ? k + w : k - w];
+          h[k] += 1.85 * ((l + r + u + d) / 4 - h[k]);
+        }
+      }
+    }
+  };
+  const F = 4;
+  const cw = Math.ceil(nx / F);
+  const ch = Math.ceil(ny / F);
+  const ch_ = new Float32Array(cw * ch);
+  const cf = new Uint8Array(cw * ch);
+  const cnt = new Uint16Array(cw * ch);
+  let sum = 0;
+  let n = 0;
+  for (let j = 0; j < ny; j++) {
+    for (let i = 0; i < nx; i++) {
+      const k = j * nx + i;
+      if (!fixed[k]) continue;
+      const c = Math.floor(j / F) * cw + Math.floor(i / F);
+      ch_[c] += hgt[k];
+      cnt[c]++;
+      sum += hgt[k];
+      n++;
+    }
+  }
+  const mean = n ? sum / n : 0;
+  for (let c = 0; c < cw * ch; c++) {
+    if (cnt[c]) {
+      ch_[c] /= cnt[c];
+      cf[c] = 1;
+    } else ch_[c] = mean;
+  }
+  sor(ch_, cf, cw, ch, 220);
+  for (let j = 0; j < ny; j++) {
+    for (let i = 0; i < nx; i++) {
+      const k = j * nx + i;
+      if (fixed[k]) continue;
+      const fx = Math.min(cw - 1.001, Math.max(0, (i + 0.5) / F - 0.5));
+      const fy = Math.min(ch - 1.001, Math.max(0, (j + 0.5) / F - 0.5));
+      const ci = Math.floor(fx);
+      const cj = Math.floor(fy);
+      const tx = fx - ci;
+      const ty = fy - cj;
+      const a = ch_[cj * cw + ci], b = ch_[cj * cw + ci + 1];
+      const c = ch_[(cj + 1) * cw + ci], d = ch_[(cj + 1) * cw + ci + 1];
+      hgt[k] = a + (b - a) * tx + (c - a) * ty + (a - b - c + d) * tx * ty;
+    }
+  }
+  sor(hgt, fixed, nx, ny, 40);
 }
 
 /** Harbour theme without a mapped coast: the bounds side the lap hugs most. */

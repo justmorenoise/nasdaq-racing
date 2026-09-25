@@ -6,6 +6,10 @@
  */
 export class Loader {
   private el = document.getElementById("loader");
+  private last = performance.now();
+  private prev = "";
+  /** ms spent in each build step (dev: `__game.loadTimes`). */
+  readonly times: Record<string, number> = {};
 
   private part(sel: string): HTMLElement | null {
     return this.el?.querySelector<HTMLElement>(sel) ?? null;
@@ -19,6 +23,10 @@ export class Loader {
   }
 
   async step(label: string, fraction: number): Promise<void> {
+    const now = performance.now();
+    if (this.prev) this.times[this.prev] = Math.round(now - this.last);
+    this.prev = label;
+    this.last = now;
     const s = this.part(".ld-step");
     const f = this.part(".ld-fill");
     if (s) s.textContent = label;
@@ -27,6 +35,8 @@ export class Loader {
   }
 
   hide(): void {
+    if (this.prev) this.times[this.prev] = Math.round(performance.now() - this.last);
+    this.prev = "";
     this.el?.classList.add("done");
   }
 }

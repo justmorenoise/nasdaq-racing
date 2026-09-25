@@ -7,7 +7,7 @@ import {
   PlaneGeometry,
 } from "three";
 import { CONFIG } from "../config";
-import type { Track } from "../track/Track";
+import { UNITS_PER_METRE, type Track } from "../track/Track";
 import type { OsmWorld } from "./osm";
 import {
   computeField,
@@ -66,6 +66,10 @@ export class Terrain {
   private seaDist: Float32Array | null;
   private seaSide: FieldOutput["seaSide"];
   private rimH: number;
+  /** Grass colour variation wavelength (world units). */
+  private get colorScale(): number {
+    return 180 * (this.track.def.realGeometry ? UNITS_PER_METRE : 1);
+  }
   private noise: ValueNoise;
   private faceCenters!: Float32Array;
   private colors!: Float32Array;
@@ -90,6 +94,7 @@ export class Terrain {
       coast: coast?.segs ?? null,
       seaSign: coast?.sign ?? 1,
       lakes: osm ? osm.lakes().map((poly) => Float32Array.from(poly.flatMap((p) => [p.x, p.y]))) : [],
+      unit: track.def.realGeometry ? UNITS_PER_METRE : 1,
     };
     let field: FieldOutput;
     try {
@@ -203,7 +208,7 @@ export class Terrain {
       const vx = b[0] - a[0], vy = b[1] - a[1], vz = b[2] - a[2];
       const nxv = uy * vz - uz * vy, nyv = uz * vx - ux * vz, nzv = ux * vy - uy * vx;
       const up = Math.abs(nyv) / (Math.hypot(nxv, nyv, nzv) || 1);
-      const n = noise.at(cx / 180, cy / 180);
+      const n = noise.at(cx / this.colorScale, cy / this.colorScale);
       c.copy(PAL.grassA).lerp(n > 0 ? PAL.grassC : PAL.grassB, Math.abs(n) * 0.9);
       if (up < 0.93) c.lerp(PAL.forest, 0.4);
       if (up < 0.8) c.lerp(PAL.dirt, 0.6);

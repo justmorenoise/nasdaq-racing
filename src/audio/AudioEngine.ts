@@ -37,7 +37,6 @@ const GEARS = 8;
 const SHIFT_HYST = 0.006;
 const DOWNSHIFT_GAP = 0.075;
 const RIVAL_RANGE = 140;
-const SOUND_SPEED = 620; // world units/s (≈ 343 m/s at the game's scale)
 
 interface EngineSpec {
   low: { f0: number; real: number[]; imag: number[] };
@@ -317,7 +316,9 @@ export class AudioEngine {
     }
     const closeness = 1 - Math.abs(bestD) / RIVAL_RANGE;
     const approach = bestD < 0 ? best.worldSpeed - car.worldSpeed : car.worldSpeed - best.worldSpeed;
-    const doppler = SOUND_SPEED / (SOUND_SPEED - Math.max(-200, Math.min(200, approach)));
+    const c = 343 * track.unitsPerMetre;
+    const vmax = 60 * track.unitsPerMetre;
+    const doppler = c / (c - Math.max(-vmax, Math.min(vmax, approach)));
     const { hz } = this.hzFor(best.relSpeed, gearAtSpeed(best.relSpeed, track.gearBounds), track);
     this.drive(r, hz * doppler, t, 0.08);
     r.filter.frequency.setTargetAtTime(900 + closeness * 2600, t, 0.1);

@@ -54,6 +54,14 @@ export interface TrackDef {
   lapLengthM?: number;
   /** Real elevation profile: [metres from the start/finish line, metres above the lowest point]. */
   elevation?: [number, number][];
+  /** Real asphalt width in metres (from circuits.json). */
+  widthM?: number;
+  /** Centerline is the real layout (OSM) at UNITS_PER_METRE, starting at the timing line. */
+  realGeometry?: boolean;
+  /** Real pit lane, entry → exit (world units). */
+  pitLane?: Pt[];
+  /** Official corners: F1 lap distance (m) and lap fraction along the centerline. */
+  corners?: { n: number; letter: string; distM: number; frac: number }[];
 }
 
 export interface TrackSample {
@@ -90,6 +98,11 @@ export interface TrackPose {
 
 /** Real hills read flat at the game's oversized-car scale; exaggerate them a little. */
 const ELEVATION_EXAGGERATION = 1.5;
+
+/** World units per real metre for circuits built from their real layout. The
+ *  cars (30 units long) read about 1.35× real size: large enough to follow in
+ *  the full view, small enough that the track keeps its real proportions. */
+export const UNITS_PER_METRE = 4;
 
 /** Scale applied to SVG layouts so they sit in the same world scale (~0..1500). */
 export const SVG_SCALE = 3;
@@ -218,6 +231,7 @@ export class Track {
   readonly carWidth: number;
   /** Covered stretches as [startDist, endDist] arc-length ranges (may wrap). */
   readonly tunnels: [number, number][];
+  private anchors?: { d: number; f: number }[];
 
   constructor(def: TrackDef, centerline: Pt[] = buildCenterline(def)) {
     this.def = def;
@@ -229,6 +243,8 @@ export class Track {
     // from the start/finish line, so they're offset by it onto our arc-length.
     this.startDist = this.computeStartDist();
 
+    const anchors = def.corners?.map((c) => ({ d: c.distM, f: c.frac }));
+    this.anchors = anchors;
     const { relSpeeds, rawLapTime, gearBounds, speedRangeKmh } = computeSpeedProfile(
       this.samples,
       {
@@ -236,6 +252,7 @@ export class Track {
         telemetry: def.telemetry,
         startDist: this.startDist,
         lapLengthM: def.lapLengthM,
+        anchors,
       },
     );
     this.samples.forEach((s, i) => (s.relSpeed = relSpeeds[i]));
@@ -245,7 +262,7 @@ export class Track {
     this.applyElevation();
     this.sectors =
       def.telemetry?.length && def.lapLengthM
-        ? telemetrySectors(this.samples, def.telemetry, this.length, this.startDist, def.lapLengthM)
+        ? telemetrySectors(this.samples, def.telemetry, this.length, this.startDist, def.lapLengthM, anchors)
         : [];
 
     if (def.edgeLoops) {
@@ -484,7 +501,7 @@ export class Track {
     const prof = this.def.elevation;
     const lapM = this.def.lapLengthM;
     if (!prof?.length || !lapM) return;
-    const remap = telemetryDistanceRemap(this.samples, this.def.telemetry, this.length, this.startDist, lapM);
+    const remap = telemetryDistanceRemap(this.samples, this.def.telemetry, this.length, this.startDist, lapM, this.anchors);
     // Street circuits climb through a town: exaggerating them turns hillsides into cliffs.
     const unitsPerM = (this.length / lapM) * (this.def.street ? 1 : ELEVATION_EXAGGERATION);
     const pts = prof.map(([d, e]) => ({ pos: remap(d), h: e * unitsPerM })).sort((a, b) => a.pos - b.pos);
@@ -565,6 +582,12 @@ export class Track {
   lateralLimits(dist: number): [number, number] {
     const m = this.carWidth / 2 + 1.5;
     return [-(this.sampleAt(this.hw[1], dist) - m), this.sampleAt(this.hw[0], dist) - m];
+  }
+
+  /** World units per real metre (uniform on real layouts, lap-averaged on drawn ones). */
+  get unitsPerMetre(): number {
+    if (this.def.realGeometry) return UNITS_PER_METRE;
+    return this.def.lapLengthM ? this.length / this.def.lapLengthM : 1;
   }
 
   /** Whether an arc-length distance is inside a tunnel. */

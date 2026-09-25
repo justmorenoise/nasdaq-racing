@@ -498,6 +498,7 @@ async function boot() {
     audio,
     frame,
     render: () => stage.render(),
+    loadTimes: loader.times,
   };
 }
 

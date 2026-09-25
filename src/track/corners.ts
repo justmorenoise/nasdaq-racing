@@ -1,5 +1,5 @@
 import { CONFIG } from "../config";
-import type { Track, TrackSample } from "./Track";
+import { UNITS_PER_METRE, type Track, type TrackSample } from "./Track";
 
 /**
  * A contiguous run of corner samples, in travel order. Index values refer to
@@ -40,24 +40,38 @@ export function computeLayout(track: Track): TrackLayout {
   const n = s.length - 1; // last sample duplicates the first
   const L = track.length;
 
-  // Smoothed |signed curvature| → per-track normalized severity (sqrt to match
-  // the speed profile's feel: even gentle corners register).
-  const win = 2;
+  // Real layouts are in metres (× UNITS_PER_METRE): thresholds become physical
+  // (turn radius, run lengths), and the curvature is averaged over ~±12 m so the
+  // vertices of the mapped polyline don't read as corners on a straight.
+  const real = !!track.def.realGeometry;
+  const spacing = L / n;
+  const win = real ? Math.max(2, Math.round((12 * UNITS_PER_METRE) / spacing)) : 2;
   const k = new Array<number>(n);
+  const ks = new Array<number>(n);
   for (let i = 0; i < n; i++) {
     let sum = 0;
     for (let d = -win; d <= win; d++) {
-      sum += Math.abs(s[(i + d + n) % n].signedCurvature);
+      sum += s[(i + d + n) % n].signedCurvature;
     }
-    k[i] = sum / (win * 2 + 1);
+    ks[i] = sum / (win * 2 + 1);
+    k[i] = Math.abs(ks[i]);
   }
   const kRef = percentile(k, sc.cornerPercentile) || 1e-6;
-  const sev = k.map((v) => Math.min(1.5, Math.sqrt(v / kRef)));
+  // Severity (sqrt, to match the speed profile's feel: even gentle corners
+  // register). Real: 1 at a 60 m radius, entering a corner under ~420 m.
+  const kUnit = real ? 1 / (60 * UNITS_PER_METRE) : kRef;
+  const sev = k.map((v) => Math.min(1.5, Math.sqrt(v / kUnit)));
+  const enter = real ? Math.sqrt(60 / 420) : sc.cornerEnter;
+  const exit = real ? Math.sqrt(60 / 650) : sc.cornerExit;
+  const M = real ? UNITS_PER_METRE : 0;
+  const minRun = real ? 22 * M : sc.minRunFrac * L;
+  const mergeGap = real ? 35 * M : sc.mergeGapFrac * L;
+  const minStraight = real ? 220 * M : sc.minStraightFrac * L;
 
   // Anchor the circular walk at a sample that is definitely not a corner so
   // runs never straddle the array wrap.
   let anchor = 0;
-  while (anchor < n && sev[anchor] >= sc.cornerExit) anchor++;
+  while (anchor < n && sev[anchor] >= exit) anchor++;
   if (anchor >= n) anchor = 0; // (degenerate: whole loop is curved)
 
   // Hysteresis: enter a corner above `cornerEnter`, stay until below `cornerExit`.
@@ -66,8 +80,8 @@ export function computeLayout(track: Track): TrackLayout {
   for (let step = 0; step < n; step++) {
     const i = (anchor + step) % n;
     if (inRun) {
-      if (sev[i] < sc.cornerExit) inRun = false;
-    } else if (sev[i] > sc.cornerEnter) {
+      if (sev[i] < exit) inRun = false;
+    } else if (sev[i] > enter) {
       inRun = true;
     }
     isCorner[i] = inRun;
@@ -85,14 +99,36 @@ export function computeLayout(track: Track): TrackLayout {
     return len;
   };
   for (const gap of segments(isCorner, anchor, n, false)) {
-    if (segLen(gap) < sc.mergeGapFrac * L) {
+    if (segLen(gap) < mergeGap) {
       for (const i of gap) isCorner[i] = true;
     }
   }
 
-  const runs: CornerRun[] = [];
+  // A chicane is one complex but two bends: split where the turn changes side,
+  // so each part gets its own inside kerb.
+  const pieces: number[][] = [];
   for (const indices of segments(isCorner, anchor, n, true)) {
-    if (segLen(indices) < sc.minRunFrac * L) continue;
+    if (!real) {
+      pieces.push(indices);
+      continue;
+    }
+    let cur: number[] = [];
+    let sign = 0;
+    for (const i of indices) {
+      const sg = Math.abs(ks[i]) > kUnit * enter * enter * 0.5 ? Math.sign(ks[i]) : sign;
+      if (sign && sg !== sign && segLen(cur) >= minRun * 0.6) {
+        pieces.push(cur);
+        cur = [];
+      }
+      sign = sg || sign;
+      cur.push(i);
+    }
+    pieces.push(cur);
+  }
+
+  const runs: CornerRun[] = [];
+  for (const indices of pieces) {
+    if (segLen(indices) < minRun) continue;
     let peakLocal = 0;
     let signSum = 0;
     for (let j = 0; j < indices.length; j++) {
@@ -111,7 +147,7 @@ export function computeLayout(track: Track): TrackLayout {
 
   const straights: Straight[] = [];
   for (const indices of segments(isCorner, anchor, n, false)) {
-    if (segLen(indices) < sc.minStraightFrac * L) continue;
+    if (segLen(indices) < minStraight) continue;
     straights.push({ indices });
   }
 

@@ -1,4 +1,5 @@
-import { Track, type TrackDef, type TrackTheme, SVG_SCALE, orientByVerso } from "./Track";
+import { Track, type TrackDef, type TrackTheme, SVG_SCALE, UNITS_PER_METRE, orientByVerso } from "./Track";
+import type { Pt } from "./centerline";
 import { parseCircuitSvg } from "./svgParse";
 import lapData from "../../circuits/circuits.json";
 
@@ -20,6 +21,8 @@ interface TrackEntry {
   tempo_secondi: number;
   /** Real lap length in metres (for aligning telemetry distances). */
   lunghezza_metri?: number;
+  /** Real asphalt width in metres (used with the OSM geometry). */
+  larghezza_metri?: number;
   file?: string;
   verso?: "cw" | "ccw";
   /** Scenery theme (default "parco"): trees and grass, a forest, a city, or a harbour city. */
@@ -82,6 +85,7 @@ const svgTracks: TrackDef[] = lapTimes
       name: entry.circuito,
       baseLapTime: entry.tempo_secondi,
       width: (entry.width ?? DEFAULT_WIDTH) * scale,
+      widthM: entry.larghezza_metri,
       scale,
       kerbScale: entry.kerbScale ?? 1,
       verso: entry.verso,
@@ -148,12 +152,66 @@ export function trackParamFor(id: string): string {
   return String(i < 0 ? 0 : i);
 }
 
+/** Real layout from OpenStreetMap (`_risorse/osm/track.py`), metres, starting at the timing line. */
+interface OsmTrack {
+  length: number;
+  line: [number, number][];
+  pit: [number, number][] | null;
+  corners: { n: number; l: string; s: number; d: number }[];
+}
+
+async function loadOsmTrack(id: string): Promise<OsmTrack | null> {
+  try {
+    const res = await fetch(`osm/${id}.track.json`);
+    if (!res.ok || !res.headers.get("content-type")?.includes("json")) return null;
+    const t = (await res.json()) as OsmTrack;
+    return t.line?.length > 50 ? t : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The asphalt's two edges as closed loops, offset from the centerline. */
+function offsetLoops(line: Pt[], half: number): Pt[][] {
+  const n = line.length;
+  const side = (sgn: number) =>
+    line.map((p, i) => {
+      const a = line[(i - 1 + n) % n];
+      const b = line[(i + 1) % n];
+      const L = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+      return { x: p.x - ((b.y - a.y) / L) * half * sgn, y: p.y + ((b.x - a.x) / L) * half * sgn };
+    });
+  return [side(1), side(-1)];
+}
+
 /**
- * Construct a track. SVG circuits fetch their (single) file lazily and parse it
- * transform-aware (honoring `<g transform>`); hand-made tracks build from points.
+ * Construct a track. Circuits mapped in OpenStreetMap use the real layout at a
+ * uniform scale (UNITS_PER_METRE) with their real asphalt width; otherwise SVG
+ * circuits fetch their (single) file lazily and parse it transform-aware
+ * (honoring `<g transform>`); hand-made tracks build from points.
  */
 export async function buildTrack(id: string): Promise<Track> {
   const def = getTrackDef(id);
+  const osm = def.widthM ? await loadOsmTrack(def.id) : null;
+  if (osm && def.widthM) {
+    const U = UNITS_PER_METRE;
+    const centerline = osm.line.map(([x, y]) => ({ x: x * U, y: y * U }));
+    const width = def.widthM * U;
+    return new Track(
+      {
+        ...def,
+        width,
+        scale: 1,
+        kerbScale: 1,
+        realGeometry: true,
+        edgeLoops: offsetLoops(centerline, width / 2),
+        startWorld: centerline[0],
+        pitLane: osm.pit?.map(([x, y]) => ({ x: x * U, y: y * U })),
+        corners: osm.corners.map((c) => ({ n: c.n, letter: c.l, distM: c.d, frac: c.s / osm.length })),
+      },
+      centerline,
+    );
+  }
   const file = fileById[def.id];
   if (!file) return new Track(def); // hand-made (oval): centerline from points
   const raw = await svgLoaders[`/circuits/${file}`]();

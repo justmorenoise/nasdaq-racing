@@ -4,6 +4,7 @@ import {
   gearBoundsFromTelemetry,
   telemetryBaseProfile,
   telemetrySpeedRange,
+  type DistAnchor,
   type TelemetryPoint,
 } from "./telemetry";
 import type { TrackSample } from "./Track";
@@ -33,6 +34,7 @@ export function computeSpeedProfile(
     telemetry?: TelemetryPoint[];
     startDist?: number;
     lapLengthM?: number;
+    anchors?: DistAnchor[];
   } = {},
 ): {
   relSpeeds: number[];
@@ -70,6 +72,7 @@ export function computeSpeedProfile(
       opts.lapLengthM!,
       vMin,
       vMax,
+      opts.anchors,
     );
   } else {
     const curv = smoothCurvature(samples, smoothing);

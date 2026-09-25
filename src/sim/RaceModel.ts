@@ -117,7 +117,7 @@ export class RaceModel {
 
   update(dt: number): void {
     const L = this.track.length;
-    const { baseGapFrac, gapPerPctFrac, gain, minMul, maxMul } = CONFIG.pace;
+    const { baseGapCars, gapPerPctFrac, gain, minMul, maxMul } = CONFIG.pace;
 
     // 1. Standings (best % first) → cumulative target gap behind the leader.
     //    Adjacent spacing grows with the adjacent % difference, so a tight %
@@ -141,7 +141,7 @@ export class RaceModel {
           this.clampPct(standings[i - 1].changePct) -
             this.clampPct(standings[i].changePct),
         );
-        cum += L * (baseGapFrac + gapPerPctFrac * dPct);
+        cum += this.track.carLength * baseGapCars + L * gapPerPctFrac * dPct;
       }
       standings[i].targetProgress = anchor - cum;
     }
@@ -254,7 +254,7 @@ export class RaceModel {
       const lateral = Math.abs(lateralOf(a, this.track) - lateralOf(b, this.track));
       if (lateral > touch) continue;
       const latCloseness = 1 - Math.max(0, lateral - this.track.carWidth) / (touch - this.track.carWidth); // 1 = touching
-      const speedFactor = Math.min(1, Math.abs(a.worldSpeed - b.worldSpeed) / s.fullClosingSpeed);
+      const speedFactor = Math.min(1, Math.abs(a.worldSpeed - b.worldSpeed) / this.track.unitsPerMetre / s.fullClosingSpeed);
       const intensity = Math.min(1, (0.35 + 0.65 * speedFactor) * latCloseness);
       if (intensity < s.minIntensity) continue;
       this.contacts.push({ a, b, intensity });

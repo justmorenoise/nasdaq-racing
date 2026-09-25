@@ -8,13 +8,13 @@ import {
   Vector3,
 } from "three";
 import { CONFIG } from "../config";
-import type { Track } from "../track/Track";
+import { UNITS_PER_METRE, type Track } from "../track/Track";
 import type { Pt } from "../track/centerline";
 import type { TrackLayout } from "../track/corners";
 import { KitInstancer, PROP_SCALE } from "./Kit";
 import type { Occupancy } from "./Occupancy";
 import type { OsmWorld } from "./osm";
-import { outwardSign, pitInfo } from "./pitInfo";
+import { outwardSign, pitInfo, type PitInfo } from "./pitInfo";
 import { Solids } from "./Solids";
 import type { Terrain } from "./Terrain";
 import { hashString, mulberry32 } from "./Terrain";
@@ -42,7 +42,7 @@ export class Scenery3D {
   private solids = new Solids();
   private kit = new KitInstancer();
   private crowd: { x: number; y: number; h: number; c: number }[] = [];
-  private pit: { window: Set<number>; side: number };
+  private pit: PitInfo;
   private rand: () => number;
   private half: number;
 
@@ -330,7 +330,9 @@ export class Scenery3D {
       return this.track.edgeRayDistance(e.x, e.y, side * s[i].nx, side * s[i].ny);
     });
     const laneIn = sc.pitLaneGap;
-    const laneOut = laneIn + sc.pitLaneWidth * 1.3;
+    const laneOut = laneIn + (this.track.def.pitLane ? 10 * UNITS_PER_METRE : sc.pitLaneWidth * 1.3);
+    // Real pit lane: the whole complex slides out to where the lane really runs.
+    const shift = (i: number) => (this.pit.laneOffset?.get(i) ?? (laneIn + laneOut) / 2) - (laneIn + laneOut) / 2;
     const garIn = laneOut + 2;
     const garOut = garIn + sc.garageDepth * 1.6;
     const padIn = garOut + 4;
@@ -339,7 +341,7 @@ export class Scenery3D {
       let best: [number, number] = [0, 0];
       let st = -1;
       for (let k = 0; k <= win.length; k++) {
-        const ok = k < win.length && clr[k] >= d + 10;
+        const ok = k < win.length && clr[k] >= d + shift(win[k]) + 10;
         if (ok && st < 0) st = k;
         if (!ok && st >= 0) {
           if (k - st > best[1] - best[0]) best = [st, k];
@@ -365,7 +367,7 @@ export class Scenery3D {
     }
     if (!tier) return;
 
-    const P = (i: number, d: number) => this.edgeOffset(i, side, d);
+    const P = (i: number, d: number) => this.edgeOffset(i, side, d + shift(i));
     const band = (d0: number, d1: number, lift0: number, lift1: number, col: number, topCol = col) => {
       for (let k = 1; k < sub.length; k++) {
         const a = sub[k - 1];
@@ -386,6 +388,11 @@ export class Scenery3D {
     for (let k = 0; k < sub.length; k += 2) {
       const oc = P(sub[k], tier.depth / 2);
       this.occ.add(oc.x, oc.y, tier.depth / 2 + 4);
+      // Keep the gap between track and lane clear too.
+      if (shift(sub[k]) > 8) {
+        const og = this.edgeOffset(sub[k], side, shift(sub[k]) / 2);
+        this.occ.add(og.x, og.y, shift(sub[k]) / 2 + 4);
+      }
     }
 
     if (tier.garage) {

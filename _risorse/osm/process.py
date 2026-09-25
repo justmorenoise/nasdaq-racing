@@ -88,6 +88,32 @@ def obb(pts):
     return [round(cx, 1), round(cy, 1), round(w, 1), round(d, 1), round(a, 3)]
 
 
+def trackside(slug, P):
+    """Proximity test to the lap (the circuit relation's ways), on a 20 m hash grid."""
+    cells = set()
+    circ = f"raw/{slug}.circuit.json"
+    if os.path.exists(circ):
+        for r in json.load(open(circ))["elements"]:
+            for m in r.get("members", []):
+                g = m.get("geometry") or []
+                for a, b in zip(g, g[1:]):
+                    ax, ay = P(a["lat"], a["lon"])
+                    bx, by = P(b["lat"], b["lon"])
+                    k = max(1, int(math.hypot(bx - ax, by - ay) / 10))
+                    for t in range(k + 1):
+                        cells.add((int((ax + (bx - ax) * t / k) // 20), int((ay + (by - ay) * t / k) // 20)))
+
+    def near(g, r):
+        n = int(r // 20) + 1
+        for x, y in g:
+            ci, cj = int(x // 20), int(y // 20)
+            if any((ci + a, cj + b) in cells for a in range(-n, n + 1) for b in range(-n, n + 1)):
+                return True
+        return False
+
+    return near
+
+
 def closed(g):
     return len(g) > 3 and g[0] == g[-1]
 
@@ -97,7 +123,8 @@ def main(slug):
     P = project(lat0, lon0)
     els = json.load(open(f"raw/{slug}.json"))["elements"]
     out = {k: [] for k in ("raceway", "stands", "buildings", "woods", "water", "coast", "roads", "crossings",
-                           "trees", "parking", "gravel", "walls")}
+                           "trees", "parking", "gravel", "walls", "fences", "paved")}
+    near = trackside(slug, P)
     for e in els:
         t = e.get("tags", {})
         if e["type"] == "node":
@@ -150,6 +177,11 @@ def main(slug):
                 out["roads"].append({"w": ROAD_W[hw], "p": dp(g, 2)})
             elif t.get("barrier") in ("wall", "retaining_wall", "guard_rail") and not closed(g):
                 out["walls"].append(dp(g, 2))
+            elif t.get("barrier") == "fence" and near(g, 120):
+                # Catch fences and spectator fences along the lap: they bound the run-off.
+                out["fences"].append(dp(g, 2))
+            elif closed(g) and not t.get("building") and (t.get("area:highway") or t.get("surface") in ("asphalt", "concrete", "paved")) and near(g, 60):
+                out["paved"].append(dp(g, 2))
     # The circuit relation (type=circuit) gives the full lap even where the
     # track is public road (Monaco); its role-less members are the lap itself.
     out["lap"] = []

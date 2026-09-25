@@ -1,4 +1,4 @@
-import type { Track } from "../track/Track";
+import { UNITS_PER_METRE, type Track } from "../track/Track";
 import type { Pt } from "../track/centerline";
 
 /**
@@ -33,6 +33,10 @@ export interface OsmRaw {
   parking: [number, number][][];
   gravel: [number, number][][];
   walls: [number, number][][];
+  /** Fences within ~120 m of the lap (catch and spectator fences). */
+  fences?: [number, number][][];
+  /** Paved areas (asphalt/concrete, area:highway) beside the lap. */
+  paved?: [number, number][][];
   attribution: string;
 }
 
@@ -172,9 +176,10 @@ export class OsmWorld {
     this.sampleGrid = new Grid(this.samples, 150);
     this.half = track.def.width / 2;
 
-    const ref = raw.lap?.length ? raw.lap : raw.raceway;
-    const race = ref.flatMap((l) => resample(l, 8));
-    const { T, residual, corr } = this.align(race);
+    const { T, residual, corr } = track.def.realGeometry
+      ? // The track *is* the OSM layout, at a uniform scale: nothing to fit.
+        { T: { s: UNITS_PER_METRE, cos: 1, sin: 0, m: 1, tx: 0, ty: 0 }, residual: 0, corr: this.samples.map(() => ({ x: 0, y: 0 })) }
+      : this.align((raw.lap?.length ? raw.lap : raw.raceway).flatMap((l) => resample(l, 8)));
     this.T = T;
     this.mirror = T.m;
     this.scale = T.s;
@@ -273,7 +278,7 @@ export class OsmWorld {
     const n = this.sampleGrid.nearest(p.x, p.y, 400);
     if (n.i >= 0) {
       const q = this.samples[n.i];
-      const realHalf = 7.5 * this.scale;
+      const realHalf = this.track.def.realGeometry ? this.half : 7.5 * this.scale;
       const push = this.half + clearance - realHalf;
       const fall = Math.max(0, 1 - Math.max(0, n.d - this.half) / 260);
       if (n.d < 0.5) return null;

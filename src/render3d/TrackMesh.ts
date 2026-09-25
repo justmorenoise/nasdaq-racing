@@ -15,11 +15,11 @@ import {
 } from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { CONFIG } from "../config";
-import type { Track } from "../track/Track";
+import { UNITS_PER_METRE, type Track } from "../track/Track";
 import type { Pt } from "../track/centerline";
 import type { TrackLayout } from "../track/corners";
 import { FlatBatch, type Pt3 } from "./FlatBatch";
-import { pitInfo } from "./pitInfo";
+import { pitInfo, type PitInfo } from "./pitInfo";
 import { smoothCircular } from "../track/racingLine";
 import { Solids } from "./Solids";
 import type { Terrain } from "./Terrain";
@@ -83,8 +83,11 @@ export class TrackMesh {
   /** Tunnel roof + what stands on it; faded by the app while chasing a car inside. */
   readonly tunnelRoof = new Group();
   private kerbAt: [Uint8Array, Uint8Array];
-  private pit: { window: Set<number>; side: number };
+  private pit: PitInfo;
   private fence: number[] = [];
+  /** Distance beyond each edge [left, right] to the first mapped barrier (OSM
+   *  walls, rails, fences) on a real layout; 0 where none is mapped. */
+  private bar: [Float32Array, Float32Array] | null = null;
 
   constructor(
     private track: Track,
@@ -97,6 +100,7 @@ export class TrackMesh {
     this.racing = this.racingLine();
     this.kSm = smoothCircular(track.samples.slice(0, this.n).map((p) => p.signedCurvature), 3, 3);
     this.computeReach();
+    this.computeBarriers();
     this.covered = new Uint8Array(this.n);
     for (let i = 0; i < this.n; i++) this.covered[i] = track.inTunnel(track.samples[i].dist) ? 1 : 0;
     this.kerbAt = [new Uint8Array(this.n), new Uint8Array(this.n)];
@@ -108,6 +112,7 @@ export class TrackMesh {
     this.verges();
     this.runOff();
     if (this.osmGravel) this.realGravel();
+    this.pitRoad();
     this.startFinish();
     this.barriers();
     this.bridges();
@@ -142,6 +147,26 @@ export class TrackMesh {
       const P = (i: number): Pt3 => ({ x: pts[i].x, y: pts[i].y, h: this.terrain.heightAt(pts[i].x, pts[i].y) + 1.0 });
       for (const [a, b, c] of tris) this.batch.tri("runoffGravel", P(a), P(b), P(c));
     }
+  }
+
+  /**
+   * The real pit lane, entry to exit, as a road draped beside the track (the
+   * paddock builder adds the pit wall and garages along its straight part).
+   * Stops short of the racing surface where it merges.
+   */
+  private pitRoad(): void {
+    const lane = this.track.def.pitLane;
+    if (!lane || lane.length < 4) return;
+    const w = 10 * UNITS_PER_METRE;
+    const off = this.track.def.width / 2 + w / 2;
+    const runs: Pt[][] = [[]];
+    for (const p of lane) {
+      if (this.terrain.trackDistance(p.x, p.y) < off) {
+        if (runs[runs.length - 1].length) runs.push([]);
+      } else runs[runs.length - 1].push(p);
+    }
+    const ground = (x: number, y: number) => this.terrain.heightAt(x, y) + 1.0;
+    for (const run of runs) if (run.length >= 2) this.batch.drapedStrip("runoffTarmac", run, w, ground, 0.1, 0x9b9b9b);
   }
 
   private get street(): boolean {
@@ -211,7 +236,9 @@ export class TrackMesh {
       l.push(i);
       this.sGrid.set(k, l);
     }
-    const max = 140;
+    const real = !!this.track.def.realGeometry;
+    const max = real ? 100 * UNITS_PER_METRE : 140;
+    const step = real ? 6 : 3;
     this.reach = [new Float32Array(this.n), new Float32Array(this.n)];
     for (const sgn of [1, -1]) {
       const side = this.side(sgn);
@@ -221,7 +248,7 @@ export class TrackMesh {
         const hw = this.hw[side][i];
         let r = max;
         if (sgn * this.kSm[i] > 0) r = Math.min(r, Math.max(0, 0.82 / Math.abs(this.kSm[i]) - hw));
-        for (let d = 0; d <= r; d += 3) {
+        for (let d = 0; d <= r; d += step) {
           const q = { x: p.x + p.nx * sgn * (hw + d), y: p.y + p.ny * sgn * (hw + d) };
           if (this.otherClearance(q, i) < d + 4) {
             r = Math.max(0, d - 4);
@@ -237,6 +264,115 @@ export class TrackMesh {
         this.reach[side][i] = m;
       }
     }
+  }
+
+  /**
+   * Where the real barriers stand: from each edge, cast along the normal
+   * against the mapped walls, guard rails and fences (roughly parallel to the
+   * track only) and keep the first hit, then clean it up — a median filter,
+   * short gaps bridged, isolated fragments dropped.
+   */
+  private computeBarriers(): void {
+    const osm = this.osm;
+    if (!osm || !this.track.def.realGeometry || this.street) return;
+    const lines = [...osm.raw.walls, ...(osm.raw.fences ?? [])];
+    if (!lines.length) return;
+    const C = 40;
+    const key = (i: number, j: number) => (i + 32768) * 65536 + (j + 32768);
+    const grid = new Map<number, number[]>();
+    const seg: number[] = [];
+    for (const line of lines) {
+      const pts = line.map(([x, y]: [number, number]) => osm.mapRaw(x, y));
+      for (let k = 1; k < pts.length; k++) {
+        const a = pts[k - 1];
+        const b = pts[k];
+        const id = seg.length / 4;
+        seg.push(a.x, a.y, b.x, b.y);
+        for (let i = Math.floor(Math.min(a.x, b.x) / C); i <= Math.floor(Math.max(a.x, b.x) / C); i++) {
+          for (let j = Math.floor(Math.min(a.y, b.y) / C); j <= Math.floor(Math.max(a.y, b.y) / C); j++) {
+            const l = grid.get(key(i, j));
+            if (l) l.push(id);
+            else grid.set(key(i, j), [id]);
+          }
+        }
+      }
+    }
+    const maxD = 90 * UNITS_PER_METRE;
+    const stamp = new Int32Array(seg.length / 4).fill(-1);
+    let tag = 0;
+    this.bar = [new Float32Array(this.n), new Float32Array(this.n)];
+    for (const sgn of [1, -1]) {
+      const side = this.side(sgn);
+      const raw = new Float32Array(this.n);
+      for (let i = 0; i < this.n; i++) {
+        const s = this.track.samples[i];
+        const ux = s.nx * sgn;
+        const uy = s.ny * sgn;
+        const ox = s.x + ux * this.hw[side][i];
+        const oy = s.y + uy * this.hw[side][i];
+        const tx = Math.cos(s.tangent);
+        const ty = Math.sin(s.tangent);
+        let best = Infinity;
+        tag++;
+        for (let d = 0; d <= maxD && d < best; d += C / 2) {
+          const cell = grid.get(key(Math.floor((ox + ux * d) / C), Math.floor((oy + uy * d) / C)));
+          if (!cell) continue;
+          for (const id of cell) {
+            if (stamp[id] === tag) continue;
+            stamp[id] = tag;
+            const ax = seg[id * 4], ay = seg[id * 4 + 1];
+            const ex = seg[id * 4 + 2] - ax, ey = seg[id * 4 + 3] - ay;
+            const len = Math.hypot(ex, ey) || 1;
+            if (Math.abs((ex * tx + ey * ty) / len) < 0.6) continue;
+            const det = ex * uy - ux * ey;
+            if (Math.abs(det) < 1e-9) continue;
+            const qx = ax - ox;
+            const qy = ay - oy;
+            const t = (ex * qy - ey * qx) / det;
+            const u = (ux * qy - uy * qx) / det;
+            if (t > 2 * UNITS_PER_METRE && u >= 0 && u <= 1 && t < best) best = t;
+          }
+        }
+        raw[i] = best <= maxD ? best : 0;
+      }
+      const n = this.n;
+      const med = new Float32Array(n);
+      for (let i = 0; i < n; i++) {
+        const w: number[] = [];
+        for (let d = -4; d <= 4; d++) {
+          const v = raw[(i + d + n) % n];
+          if (v > 0) w.push(v);
+        }
+        if (w.length < 5) continue;
+        w.sort((a, b) => a - b);
+        med[i] = w[w.length >> 1];
+      }
+      // Bridge gaps up to ~50 m, then drop fragments shorter than ~30 m.
+      const gap = Math.round((50 * UNITS_PER_METRE) / (this.track.length / n));
+      const frag = Math.round((30 * UNITS_PER_METRE) / (this.track.length / n));
+      const out = this.bar[side];
+      out.set(med);
+      for (let i = 0; i < n; i++) {
+        if (out[i] > 0 || !(out[(i - 1 + n) % n] > 0)) continue;
+        let j = 1;
+        while (j <= gap && !(med[(i + j) % n] > 0)) j++;
+        if (j > gap) continue;
+        const a = out[(i - 1 + n) % n];
+        const b = med[(i + j) % n];
+        for (let k = 0; k < j; k++) out[(i + k) % n] = a + ((b - a) * (k + 1)) / (j + 1);
+      }
+      for (let i = 0; i < n; i++) {
+        if (!(out[i] > 0) || out[(i - 1 + n) % n] > 0) continue;
+        let j = 0;
+        while (j < n && out[(i + j) % n] > 0) j++;
+        if (j < frag) for (let k = 0; k < j; k++) out[(i + k) % n] = 0;
+      }
+    }
+  }
+
+  /** Mapped barrier distance beyond the edge at sample `i` on side `sgn` (0 = none). */
+  private barrierAt(i: number, sgn: number): number {
+    return this.bar ? this.bar[this.side(sgn)][i % this.n] : 0;
   }
 
   /** Like `edge`, but resting on the ground once it leaves the road's shoulder. */
@@ -427,9 +563,12 @@ export class TrackMesh {
         const t0 = Math.sin((Math.PI * (k - 1)) / (m - 1 || 1));
         const t1 = Math.sin((Math.PI * k) / (m - 1 || 1));
         if (t0 < 0.05 && t1 < 0.05) continue;
-        // Never spill onto another stretch of track: shrink until clear.
+        // Up to the real barrier where one is mapped (the run-off's true depth),
+        // never spilling onto another stretch of track.
         const reach = (i: number, t: number) => {
-          const r = Math.min(width * t, this.room(i, sgn) - start);
+          const b = this.barrierAt(i, sgn);
+          const want = b > 0 ? (b - start - 2 * UNITS_PER_METRE) * Math.min(1, t * 3) : width * t;
+          const r = Math.min(want, this.room(i, sgn) - start);
           return r > 2 ? r : 0;
         };
         const r0 = reach(i0, t0);
@@ -497,19 +636,26 @@ export class TrackMesh {
       return;
     }
     const g = this.solids;
-    const off = 14;
-    for (const straight of this.layout.straights) {
-      const idx = straight.indices;
+    // Mapped barriers where OSM has them; elsewhere a wall along the straights.
+    const onStraight = new Set(this.layout.straights.flatMap((st) => st.indices));
+    const spans = this.bar ? [Array.from({ length: this.n + 1 }, (_, i) => i % this.n)] : this.layout.straights.map((st) => st.indices);
+    for (const idx of spans) {
       for (const sgn of [1, -1]) {
+        const offAt = (i: number) => {
+          const want = this.barrierAt(i, sgn) || (onStraight.has(i) ? 14 : 0);
+          return want ? Math.min(want, this.room(i, sgn) - 2) : 0;
+        };
         let color = SPONSOR[(idx[0] + (sgn > 0 ? 0 : 3)) % SPONSOR.length];
         for (let k = 1; k < idx.length; k++) {
           const i0 = idx[k - 1];
           const i1 = idx[k];
           if (this.track.nearSelf[i0] || this.track.nearSelf[i1]) continue;
           if (sgn === this.pit.side && (this.pit.window.has(i0) || this.pit.window.has(i1))) continue;
-          if (this.room(i0, sgn) < off + 2 || this.room(i1, sgn) < off + 2) continue;
-          const a = this.edge(i0, sgn, off, 0);
-          const b = this.edge(i1, sgn, off, 0);
+          const o0 = offAt(i0);
+          const o1 = offAt(i1);
+          if (o0 < 10 || o1 < 10 || Math.abs(o0 - o1) > 24) continue;
+          const a = this.edge(i0, sgn, o0, 0);
+          const b = this.edge(i1, sgn, o1, 0);
           if (k % 7 === 0) color = SPONSOR[Math.floor(k / 7 + i0) % SPONSOR.length];
           // Base down to whatever the ground does beside the road.
           const ga = Math.min(a.h, this.terrain.heightAt(a.x, a.y)) - 1.5;
@@ -521,8 +667,8 @@ export class TrackMesh {
             0xc9c6be,
             0xd8d5ce,
           );
-          const fa = this.edge(i0, sgn, off - 1, 0);
-          const fb = this.edge(i1, sgn, off - 1, 0);
+          const fa = this.edge(i0, sgn, o0 - 1, 0);
+          const fb = this.edge(i1, sgn, o1 - 1, 0);
           g.wall(fa, fb, fa.h, fb.h, 0.25, 0.8, 4.4, color);
           this.fence.push(a.x, a.h + 5, a.y, b.x, b.h + 5, b.y);
         }
@@ -717,7 +863,10 @@ export class TrackMesh {
         .slice(Math.floor(m * 0.25), Math.ceil(m * 0.75))
         .filter((i) => !this.track.nearSelf[i] && this.room(i, -run.turnSign) >= 14 + r);
       if (idx.length < 2) return [];
-      const line = idx.map((i) => this.edge(i, -run.turnSign, Math.min(reach, this.room(i, -run.turnSign) - r), 0));
+      const line = idx.map((i) => {
+        const b = this.barrierAt(i, -run.turnSign);
+        return this.edge(i, -run.turnSign, Math.min(b > 0 ? b - r * 1.2 : reach, this.room(i, -run.turnSign) - r), 0);
+      });
       return resampleByDistance(line, r * 2);
     });
     const keep = runPts.map((pts) => pts.map(() => true));

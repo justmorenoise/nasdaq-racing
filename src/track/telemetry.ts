@@ -39,13 +39,14 @@ export function telemetryBaseProfile(
   lapLengthM: number,
   vMin: number,
   vMax: number,
+  known?: DistAnchor[],
 ): number[] {
   const n = samples.length;
   const [kmhMin, kmhMax] = telemetrySpeedRange(telemetry);
   const span = Math.max(1, kmhMax - kmhMin);
   const relAt = (kmh: number) => vMin + (vMax - vMin) * ((kmh - kmhMin) / span);
 
-  const aligned = alignTelemetry(samples, telemetry, length, startDist, lapLengthM)?.stations;
+  const aligned = alignTelemetry(samples, telemetry, length, startDist, lapLengthM, known)?.stations;
 
   if (!aligned || aligned.length < 2) {
     // Degenerate (no detectable corners): drop each speed at its raw distance.
@@ -104,6 +105,12 @@ interface AlignedStation {
   label?: string;
 }
 
+/** A real lap distance (m) pinned to a lap fraction of the geometry. */
+export interface DistAnchor {
+  d: number;
+  f: number;
+}
+
 /**
  * Place every telemetry station on the track geometry. The corner apices (speed
  * minima) are matched to curvature peaks in lap order; the matched pairs (plus the
@@ -118,26 +125,31 @@ function alignTelemetry(
   length: number,
   startDist: number,
   lapLengthM: number,
+  known?: DistAnchor[],
 ): { stations: AlignedStation[]; remap: (distM: number) => number } | null {
-  const geom = curvaturePeaks(samples, startDist, length);
-  if (!geom.length) return null;
-
-  const minIdx = speedMinimaIndices(telemetry);
-  if (!minIdx.length) return null;
-
-  const match = monotonicMatch(
-    minIdx.map((i) => (((telemetry[i].distM / lapLengthM) % 1) + 1) % 1),
-    geom.map((g) => g.pos),
-  );
-
   // distM → lap-fraction anchors: start/finish line + each matched apex.
   const anchors = [{ d: 0, f: 0 }];
   const posByIdx = new Map<number, number>();
-  for (let c = 0; c < minIdx.length; c++) {
-    const g = match[c];
-    if (g < 0) continue;
-    anchors.push({ d: telemetry[minIdx[c]].distM, f: geom[g].pos });
-    posByIdx.set(minIdx[c], geom[g].pos);
+  if (known?.length) {
+    // Real geometry: the official corners are already located on it.
+    anchors.push(...known);
+  } else {
+    const geom = curvaturePeaks(samples, startDist, length);
+    if (!geom.length) return null;
+
+    const minIdx = speedMinimaIndices(telemetry);
+    if (!minIdx.length) return null;
+
+    const match = monotonicMatch(
+      minIdx.map((i) => (((telemetry[i].distM / lapLengthM) % 1) + 1) % 1),
+      geom.map((g) => g.pos),
+    );
+    for (let c = 0; c < minIdx.length; c++) {
+      const g = match[c];
+      if (g < 0) continue;
+      anchors.push({ d: telemetry[minIdx[c]].distM, f: geom[g].pos });
+      posByIdx.set(minIdx[c], geom[g].pos);
+    }
   }
   anchors.push({ d: lapLengthM, f: 1 });
   anchors.sort((a, b) => a.d - b.d);
@@ -174,8 +186,9 @@ export function telemetryDistanceRemap(
   length: number,
   startDist: number,
   lapLengthM: number,
+  known?: DistAnchor[],
 ): (distM: number) => number {
-  const aligned = telemetry?.length ? alignTelemetry(samples, telemetry, length, startDist, lapLengthM) : null;
+  const aligned = telemetry?.length ? alignTelemetry(samples, telemetry, length, startDist, lapLengthM, known) : null;
   return aligned?.remap ?? ((d) => ((((d / lapLengthM) % 1) + 1) % 1));
 }
 
@@ -220,8 +233,9 @@ export function telemetrySectors(
   length: number,
   startDist: number,
   lapLengthM: number,
+  known?: DistAnchor[],
 ): TelemetrySector[] {
-  const aligned = alignTelemetry(samples, telemetry, length, startDist, lapLengthM)?.stations;
+  const aligned = alignTelemetry(samples, telemetry, length, startDist, lapLengthM, known)?.stations;
   const toDist = (pos: number) => (((startDist + pos * length) % length) + length) % length;
 
   if (aligned) {

@@ -110,9 +110,11 @@ export class CarView3D {
         d = Math.atan2(Math.sin(d), Math.cos(d));
         yawRate = d / dt;
       }
-      const accel = (car.worldSpeed - this.prevSpeed) / dt;
-      const tRoll = Math.max(-MAX_ROLL, Math.min(MAX_ROLL, yawRate * car.worldSpeed * 0.00018));
-      const tPitch = Math.max(-MAX_PITCH, Math.min(MAX_PITCH, accel * 0.00025));
+      // Lateral / longitudinal acceleration in m/s² (≈ 4g cornering → full roll).
+      const upm = this.track.unitsPerMetre;
+      const accel = (car.worldSpeed - this.prevSpeed) / dt / upm;
+      const tRoll = Math.max(-MAX_ROLL, Math.min(MAX_ROLL, (yawRate * car.worldSpeed) / upm * 0.0011));
+      const tPitch = Math.max(-MAX_PITCH, Math.min(MAX_PITCH, accel * 0.0015));
       const e = 1 - Math.exp(-6 * dt);
       this.roll += (tRoll - this.roll) * e;
       this.pitch += (tPitch - this.pitch) * e;
