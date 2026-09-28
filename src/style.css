@@ -528,6 +528,9 @@ canvas {
 .race-status .dot.done {
   background: var(--text-dim);
 }
+.race-status .dot.demo {
+  background: #8ab4ff;
+}
 @keyframes pulse {
   70% {
     box-shadow: 0 0 0 7px rgba(255, 93, 93, 0);

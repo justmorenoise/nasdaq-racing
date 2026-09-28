@@ -117,7 +117,9 @@ export class Leaderboard {
       if (current !== row.el) this.list.insertBefore(row.el, current ?? null);
 
       row.posEl.textContent = String(i + 1);
-      const delta = car.price - car.basePrice;
+      // Change on the day in dollars, from the price and the day's % (vs the
+      // previous close); basePrice is only the seed price the car starts at.
+      const delta = (car.price * car.changePct) / (100 + car.changePct);
       row.priceEl.textContent = `${money(car.price)}  ${signedMoney(delta)}`;
       row.deltaEl.textContent = `${fmtSigned(car.changePct)}%`;
       const cls = car.changePct >= 0 ? "up" : "down";

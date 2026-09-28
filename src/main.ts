@@ -32,6 +32,7 @@ import { Loader } from "./ui/Loader";
 import { Commentary } from "./ui/Commentary";
 import { detectBattles } from "./sim/battles";
 import { RaceClock } from "./sim/RaceClock";
+import { marketOpen, nextOpen } from "./sim/market";
 import { RaceHud } from "./ui/RaceHud";
 import { AudioEngine } from "./audio/AudioEngine";
 import { gearAtSpeed } from "./track/gearbox";
@@ -58,23 +59,29 @@ async function boot() {
   // ?demo=N runs a compressed N-second session that ends with a podium.
   const demoSeconds = params.has("demo") ? Number(params.get("demo")) || 120 : null;
 
-  // Feed selection: real data (Supabase) is the default when configured;
-  // ?feed=demo forces the offline simulated feed (also the fallback when the
-  // Supabase env vars are missing).
-  const supaUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
-  const supaKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
-  const wantDemo = params.get("feed") === "demo";
-  const useSupabase = !wantDemo && !!supaUrl && !!supaKey;
-
-  // Offline/demo runs the race endlessly so it can be shown at any hour without
-  // hitting the US market close; an explicit ?demo=N still ends with a podium.
   // Dev-only: ?at=<ISO date> pretends "now" is that instant (e.g. after the close).
   const atMs = params.has("at") ? Date.parse(params.get("at")!) : NaN;
-  const clock = new RaceClock(
-    demoSeconds,
-    !useSupabase && demoSeconds == null,
-    Number.isFinite(atMs) ? atMs - Date.now() : 0,
-  );
+  const offsetMs = Number.isFinite(atMs) ? atMs - Date.now() : 0;
+  const now = () => Date.now() + offsetMs;
+
+  // Live vs demo: live data (Supabase) while the Nasdaq session is open, a
+  // simulated race while it is closed (nights, weekends, holidays), switching
+  // by itself at the open and the close. ?feed=demo / ?feed=live force one.
+  const supaUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
+  const supaKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
+  const feedParam = params.get("feed");
+  const auto = feedParam !== "demo" && feedParam !== "live";
+  const useSupabase = !!supaUrl && !!supaKey && feedParam !== "demo" && (feedParam === "live" || marketOpen(now()));
+  if (auto && supaUrl && supaKey) {
+    const wasOpen = marketOpen(now());
+    window.setInterval(() => {
+      if (marketOpen(now()) !== wasOpen) location.reload();
+    }, 30_000);
+  }
+
+  // Demo runs the race endlessly so it can be shown at any hour; an explicit
+  // ?demo=N still ends with a podium.
+  const clock = new RaceClock(demoSeconds, !useSupabase && demoSeconds == null, offsetMs);
   // ?track= is a numeric index into TRACKS (slug/id still accepted for old links).
   const trackId = resolveTrackParam(params.get("track"));
   // The starting grid is shareable/persisted (?symbols= + localStorage); falls
@@ -228,6 +235,7 @@ async function boot() {
   });
   const commentary = new Commentary((sym) => followManually(sym));
   const raceHud = new RaceHud(track.length, (sym) => camera.follow(sym));
+  if (!useSupabase) raceHud.setDemo(nextOpen(now()));
   // Debug-only gear readout for the focused car (hidden unless CONFIG.debug.showGear).
   const gearHud = document.createElement("div");
   gearHud.className = "gear-debug hidden";

@@ -23,6 +23,12 @@
         "--strictPort"
       ],
       "port": 4173
+    },
+    {
+      "name": "mnwebsite",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "../mnwebsite", "start"],
+      "port": 4201
     }
   ]
 }

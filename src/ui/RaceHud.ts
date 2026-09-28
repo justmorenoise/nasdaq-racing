@@ -1,7 +1,7 @@
 import type { Car } from "../sim/Car";
 import type { ClockSample } from "../sim/RaceClock";
 import { affiliateUrl, affiliateEnabled, AFFILIATE_REL } from "../affiliate";
-import { t } from "../i18n";
+import { lang, t } from "../i18n";
 
 function hms(seconds: number): string {
   const s = Math.floor(seconds);
@@ -10,6 +10,16 @@ function hms(seconds: number): string {
   const sec = s % 60;
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${pad(h)}:${pad(m)}:${pad(sec)}`;
+}
+
+/** When the market reopens, in the viewer's own time zone and language. */
+function reopenLabel(ms: number): string {
+  const d = new Date(ms);
+  const sameDay = d.toDateString() === new Date().toDateString();
+  const time = d.toLocaleTimeString(lang(), { hour: "2-digit", minute: "2-digit" });
+  if (sameDay) return time;
+  const day = d.toLocaleDateString(lang(), { weekday: "short" });
+  return `${day} ${time}`;
 }
 
 /**
@@ -23,6 +33,8 @@ export class RaceHud {
   private trackLength: number;
   /** Symbols + % of the podium currently shown, to redraw only on change. */
   private podiumKey = "";
+  /** Demo mode (market closed): the status reads DEMO and when the market reopens. */
+  private demo: { reopens: number | null } | null = null;
 
   constructor(trackLength: number, private onSelect: (symbol: string) => void) {
     this.trackLength = trackLength;
@@ -41,7 +53,18 @@ export class RaceHud {
     }
   }
 
+  /** Market closed: simulated prices; `reopens` = next session open (ms), if known. */
+  setDemo(reopens: number | null): void {
+    this.demo = { reopens };
+  }
+
   setStatus(s: ClockSample): void {
+    if (this.demo) {
+      const when = this.demo.reopens != null ? reopenLabel(this.demo.reopens) : "";
+      this.status.innerHTML =
+        `<span class="dot demo"></span> ` + (when ? t("hud.demoUntil", { when }) : t("hud.demo"));
+      return;
+    }
     if (s.state === "pre") {
       this.status.innerHTML = `<span class="dot pre"></span> ${t("hud.pre")}`;
     } else if (s.state === "running") {
