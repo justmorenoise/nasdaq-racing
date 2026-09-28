@@ -235,7 +235,8 @@ async function boot() {
   });
   const commentary = new Commentary((sym) => followManually(sym));
   const raceHud = new RaceHud(track.length, (sym) => camera.follow(sym));
-  if (!useSupabase) raceHud.setDemo(nextOpen(now()));
+  // The reopening time only when live data will actually take over then.
+  if (!useSupabase) raceHud.setDemo(auto && supaUrl && supaKey ? nextOpen(now()) : null);
   // Debug-only gear readout for the focused car (hidden unless CONFIG.debug.showGear).
   const gearHud = document.createElement("div");
   gearHud.className = "gear-debug hidden";
