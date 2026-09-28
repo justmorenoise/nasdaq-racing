@@ -83,8 +83,8 @@ export class OsmEnvironment {
     this.group.add(this.kit.build());
     this.group.add(
       this.batch.build({
-        road: { material: new MeshLambertMaterial({ map: asphaltTexture(), vertexColors: true, color: 0xc4c5c8 }), tile: 60 },
-        paint: { material: new MeshLambertMaterial({ vertexColors: true }) },
+        road: { material: new MeshLambertMaterial({ map: asphaltTexture(), vertexColors: true, color: 0xc4c5c8 }), tile: 60, layer: 1 },
+        paint: { material: new MeshLambertMaterial({ vertexColors: true }), layer: 2 },
       }),
     );
   }
@@ -106,27 +106,44 @@ export class OsmEnvironment {
     return this.terrain.trackDistance(p.x, p.y) > this.trackClear && !this.terrain.water?.contains(p.x, p.y);
   }
 
+  /** Ground steeper than a road can be terraced into without cutting a jagged cliff. */
+  private steep(p: Pt): boolean {
+    // At the road's own scale and at the terrain grid's, so neither a local
+    // step nor a long bank slips through.
+    for (const e of [16, 40]) {
+      const gx = (this.terrain.heightAt(p.x + e, p.y) - this.terrain.heightAt(p.x - e, p.y)) / (2 * e);
+      const gy = (this.terrain.heightAt(p.x, p.y + e) - this.terrain.heightAt(p.x, p.y - e)) / (2 * e);
+      if (Math.hypot(gx, gy) > 0.3) return true;
+    }
+    return false;
+  }
+
   /** Split a mapped polyline into drape-able runs, resampled so it follows the ground. */
   private runs(line: Pt[], step: number): Pt[][] {
-    const out: Pt[][] = [];
-    let cur: Pt[] = [];
+    // Resample first, so every point the road will be draped on is checked.
+    const dense: (Pt | null)[] = [];
     for (let k = 0; k < line.length; k++) {
       const p = line[k];
-      if (!this.usable(p)) {
+      if (k > 0) {
+        const q = line[k - 1];
+        const L = Math.hypot(p.x - q.x, p.y - q.y);
+        if (L > 400) dense.push(null);
+        else {
+          const n = Math.floor(L / step);
+          for (let t = 1; t < n; t++) dense.push({ x: q.x + ((p.x - q.x) * t) / n, y: q.y + ((p.y - q.y) * t) / n });
+        }
+      }
+      dense.push(p);
+    }
+    const out: Pt[][] = [];
+    let cur: Pt[] = [];
+    for (const p of dense) {
+      // Roads stay out of the band levelled to the track (terracing one there
+      // raises spikes against the pinned ground) and off steep slopes.
+      if (!p || !this.usable(p) || this.terrain.trackDistance(p.x, p.y) < this.terrain.corridor + 10 || this.steep(p)) {
         if (cur.length > 1) out.push(cur);
         cur = [];
         continue;
-      }
-      if (cur.length) {
-        const q = cur[cur.length - 1];
-        const L = Math.hypot(p.x - q.x, p.y - q.y);
-        if (L > 400) {
-          if (cur.length > 1) out.push(cur);
-          cur = [];
-        } else {
-          const n = Math.floor(L / step);
-          for (let t = 1; t < n; t++) cur.push({ x: q.x + ((p.x - q.x) * t) / n, y: q.y + ((p.y - q.y) * t) / n });
-        }
       }
       cur.push(p);
     }
@@ -213,6 +230,39 @@ export class OsmEnvironment {
     }
   }
 
+  /** Ground a car park may be paved on: clear of the track's band, not steep. */
+  private lotGround(p: Pt): boolean {
+    return this.usable(p) && this.terrain.trackDistance(p.x, p.y) >= this.terrain.corridor && !this.steep(p);
+  }
+
+  /**
+   * A paved triangle following the ground: split down to the terrain's scale
+   * (a big flat triangle over a slope floats or sinks), pieces off paveable
+   * ground dropped.
+   */
+  private drapeTri(a: Pt, b: Pt, c: Pt, depth = 0): void {
+    const ab = Math.hypot(a.x - b.x, a.y - b.y);
+    const bc = Math.hypot(b.x - c.x, b.y - c.y);
+    const ca = Math.hypot(c.x - a.x, c.y - a.y);
+    const long = Math.max(ab, bc, ca);
+    if (long > 12 && depth < 16) {
+      const mid = (p: Pt, q: Pt) => ({ x: (p.x + q.x) / 2, y: (p.y + q.y) / 2 });
+      if (long === ab) {
+        this.drapeTri(a, mid(a, b), c, depth + 1);
+        this.drapeTri(mid(a, b), b, c, depth + 1);
+      } else if (long === bc) {
+        this.drapeTri(a, b, mid(b, c), depth + 1);
+        this.drapeTri(a, mid(b, c), c, depth + 1);
+      } else {
+        this.drapeTri(a, b, mid(c, a), depth + 1);
+        this.drapeTri(mid(c, a), b, c, depth + 1);
+      }
+      return;
+    }
+    if (![a, b, c].every((p) => this.lotGround(p))) return;
+    this.batch.tri("road", this.onGround(a, 0.4), this.onGround(b, 0.4), this.onGround(c, 0.4), 0xd6d6d6);
+  }
+
   /** Car parks: a paved lot with rows of parked cars. */
   private parking(): void {
     for (const poly of this.osm.raw.parking) {
@@ -220,14 +270,14 @@ export class OsmEnvironment {
       if (pts.length < 4) continue;
       const contour = pts.map((p) => new Vector2(p.x, p.y));
       const tris = ShapeUtils.triangulateShape(contour, []);
-      for (const [a, b, c] of tris) this.batch.tri("road", this.onGround(pts[a], 0.4), this.onGround(pts[b], 0.4), this.onGround(pts[c], 0.4), 0xd6d6d6);
+      for (const [a, b, c] of tris) this.drapeTri(pts[a], pts[b], pts[c]);
       let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
       for (const p of pts) {
         x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y); x1 = Math.max(x1, p.x); y1 = Math.max(y1, p.y);
       }
       for (let x = x0 + 8; x < x1 - 8; x += 11) {
         for (let y = y0 + 12; y < y1 - 12; y += 26) {
-          if (this.rand() < 0.25 || !pointInPoly(pts, x, y) || !this.usable({ x, y })) continue;
+          if (this.rand() < 0.25 || !pointInPoly(pts, x, y) || !this.lotGround({ x, y })) continue;
           this.kit.add("car_parked", x, this.terrain.heightAt(x, y) + 0.4, y, Math.PI / 2, 1, this.pick(CARS));
         }
       }

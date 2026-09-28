@@ -16,6 +16,8 @@ export interface FieldInput {
   bounds: { minX: number; minY: number; maxX: number; maxY: number };
   /** Track samples interleaved [x, y, h, dist] (closing duplicate excluded). */
   samples: Float32Array;
+  /** Asphalt half-width per sample (the wider side). */
+  halfWidth: Float32Array;
   length: number;
   /** Mapped coastline segments [x0, y0, x1, y1]…, with the side the sea is on. */
   coast: Float32Array | null;
@@ -352,7 +354,30 @@ export function computeField(inp: FieldInput): FieldOutput {
     if (carved) lakes.push({ poly: flat, level });
   }
 
-  // 7. Ease the border down to one rim height for the horizon skirt.
+  // 7. No road ever buried: under each sample's asphalt (one cell of slack, so
+  //    the mesh triangles stay under the edge too) the ground sits below the
+  //    road, rising beyond at most 1:1. Only bites where a pass climbing over
+  //    another left its embankment across the lower road.
+  for (let si = 0; si < ns; si++) {
+    const flat = inp.halfWidth[si] + cell + 2;
+    const R = flat + 40 * U;
+    const base = sh(si) - 0.9;
+    const i0 = Math.max(0, Math.floor((sx(si) - R - x0) / cell));
+    const i1 = Math.min(nx - 1, Math.ceil((sx(si) + R - x0) / cell));
+    const j0 = Math.max(0, Math.floor((sy(si) - R - y0) / cell));
+    const j1 = Math.min(ny - 1, Math.ceil((sy(si) + R - y0) / cell));
+    for (let j = j0; j <= j1; j++) {
+      for (let i = i0; i <= i1; i++) {
+        const d = Math.hypot(x0 + i * cell - sx(si), y0 + j * cell - sy(si));
+        if (d > R) continue;
+        const k = idx(i, j);
+        const cap = base + Math.max(0, d - flat);
+        if (hgt[k] > cap) hgt[k] = cap;
+      }
+    }
+  }
+
+  // 8. Ease the border down to one rim height for the horizon skirt.
   let lo = Infinity;
   for (let k = 0; k < N; k++) if (fixed[k]) lo = Math.min(lo, hgt[k]);
   const rimH = (waterLevel ?? lo) - 25;

@@ -5,9 +5,11 @@ import {
   Fog,
   HalfFloatType,
   HemisphereLight,
+  Matrix4,
   PCFSoftShadowMap,
   PerspectiveCamera,
   Scene,
+  ShaderChunk,
   SRGBColorSpace,
   Vector2,
   Vector3,
@@ -25,6 +27,14 @@ import { MotionBlurPass } from "./MotionBlurPass";
 const SKY = 0xcfdde3;
 /** Where the sunlight comes from: a warm late-afternoon sun, low for long shadows. */
 const SUN_DIR = new Vector3(-0.62, 0.66, 0.42).normalize();
+
+// Fade shadows out over the last stretch of the shadow map, so its border
+// never shows as a hard line where they stop.
+ShaderChunk.shadowmap_pars_fragment = ShaderChunk.shadowmap_pars_fragment.replace(
+  "return mix( 1.0, shadow, shadowIntensity );",
+  `vec2 edgeD = min( shadowCoord.xy, 1.0 - shadowCoord.xy );
+		return mix( 1.0, shadow, shadowIntensity * smoothstep( 0.0, 0.1, min( edgeD.x, edgeD.y ) ) );`,
+);
 
 /** Final grade: pull saturation down and warm the mids, like the reference renders. */
 const GradeShader = {
@@ -69,6 +79,10 @@ export class Stage {
   private frameAvg = 1 / 60;
   private slowFor = 0;
   private fastFor = 0;
+  /** Sun-view rotation (and inverse), to snap the shadow frustum to its texels. */
+  private sunRot = new Matrix4().lookAt(SUN_DIR, new Vector3(), new Vector3(0, 1, 0));
+  private sunInv = this.sunRot.clone().transpose();
+  private snap = new Vector3();
 
   constructor(private host: HTMLElement) {
     // No canvas MSAA: the scene pass renders multisampled into its own target.
@@ -176,12 +190,21 @@ export class Stage {
     });
   }
 
-  /** Centre the shadow frustum on (x, h, z), covering a square of half-size `radius`. */
+  /**
+   * Cover the circle of `radius` round (x, h, z) with the shadow map. The size
+   * moves in coarse steps and the centre snaps to whole shadow texels, so
+   * shadow edges stay still while the camera glides instead of shimmering.
+   */
   focusShadows(x: number, h: number, z: number, radius: number): void {
     const cam = this.sun.shadow.camera;
-    const r = Math.max(220, radius);
-    this.sun.target.position.set(x, h, z);
-    this.sun.position.set(x + SUN_DIR.x * r * 3, h + SUN_DIR.y * r * 3, z + SUN_DIR.z * r * 3);
+    const r = 2 ** (Math.ceil(Math.log2(Math.max(220, radius)) * 4) / 4);
+    const texel = (2 * r) / this.sun.shadow.mapSize.x;
+    const c = this.snap.set(x, h, z).applyMatrix4(this.sunInv);
+    c.x = Math.round(c.x / texel) * texel;
+    c.y = Math.round(c.y / texel) * texel;
+    c.applyMatrix4(this.sunRot);
+    this.sun.target.position.copy(c);
+    this.sun.position.set(c.x + SUN_DIR.x * r * 3, c.y + SUN_DIR.y * r * 3, c.z + SUN_DIR.z * r * 3);
     cam.left = -r;
     cam.right = r;
     cam.top = r;
@@ -189,6 +212,11 @@ export class Stage {
     cam.near = r * 0.5;
     cam.far = r * 7;
     cam.updateProjectionMatrix();
+  }
+
+  /** Fog and AO radius for a framing that shows ground out to about `radius`. */
+  frame(radius: number): void {
+    const r = Math.max(220, radius);
     const fog = this.scene.fog as Fog;
     fog.near = Math.max(1500, r * 4);
     fog.far = Math.max(6000, r * 14);

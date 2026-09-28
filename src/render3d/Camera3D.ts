@@ -86,6 +86,41 @@ export class Camera3D {
     return this.cur.dist * Math.tan(MathUtils.degToRad(this.cur.fov) / 2) * 1.8;
   }
 
+  /**
+   * Ground worth shadowing: in the full view the circle round the focus; on a
+   * low car-level shot the whole visible ground out to `reach` from the lens
+   * (the view runs far ahead of the look-at point, where a circle round it
+   * would end the shadows in a visible line).
+   */
+  shadowArea(): { center: Vector3; radius: number } {
+    if (this.mode.kind === "full" && !this.pinned) return { center: this.cur.target, radius: this.focusRadius };
+    const cam = this.camera;
+    cam.updateMatrixWorld();
+    const eye = cam.position;
+    const ground = this.cur.target.y - 4;
+    const reach = Math.max(700, this.cur.dist * 4);
+    const pts: Vector3[] = [new Vector3(eye.x, ground, eye.z)];
+    const dir = new Vector3();
+    for (const [nx, ny] of [[-1, -1], [1, -1], [-1, 1], [1, 1], [0, 1]]) {
+      dir.set(nx, ny, 0.5).unproject(cam).sub(eye).normalize();
+      const flat = Math.hypot(dir.x, dir.z) || 1e-6;
+      const t = dir.y < -1e-3 ? (ground - eye.y) / dir.y : Infinity;
+      const d = Math.min(reach, t * flat);
+      pts.push(new Vector3(eye.x + (dir.x / flat) * d, ground, eye.z + (dir.z / flat) * d));
+    }
+    const center = new Vector3();
+    const min = pts[0].clone();
+    const max = pts[0].clone();
+    for (const p of pts) {
+      min.min(p);
+      max.max(p);
+    }
+    center.addVectors(min, max).multiplyScalar(0.5);
+    let radius = 0;
+    for (const p of pts) radius = Math.max(radius, p.distanceTo(center));
+    return { center, radius };
+  }
+
   private setMode(m: Mode): void {
     this.mode = m;
     this.sinceSwitch = 0;

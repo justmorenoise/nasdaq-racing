@@ -34,14 +34,19 @@ export class SkidMarks3D {
   private e = new Euler();
 
   constructor(private track: Track) {
-    const w = track.def.width;
-    this.tyreOff = w * 0.22;
-    const geo = new PlaneGeometry(w * 0.5, Math.max(1.4, w * 0.06)).rotateX(-Math.PI / 2);
+    // Sized on the car model: rear tyres ~0.2 of its width wide, their centres
+    // ~0.4 of it either side of the axis.
+    this.tyreOff = track.carWidth * 0.38;
+    const geo = new PlaneGeometry(track.carLength * 0.6, track.carWidth * 0.2).rotateX(-Math.PI / 2);
     const mat = new MeshBasicMaterial({
       color: 0x0d0f12,
       transparent: true,
-      opacity: 0.12,
+      opacity: 0.14,
       depthWrite: false,
+      // Above the track's painted layers (see TrackMesh), never z-fighting them.
+      polygonOffset: true,
+      polygonOffsetFactor: -5,
+      polygonOffsetUnits: -10,
     });
     this.mesh = new InstancedMesh(geo, mat, CAPACITY);
     this.mesh.count = 0;

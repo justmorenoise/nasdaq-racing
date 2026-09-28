@@ -100,8 +100,14 @@ to draw. Keep these layers decoupled — the sim must never import from `render3
   crossovers), harmonic fill outward, then themed hills/ridges/mountains, rim eased to the horizon skirt; for
   `porto` a sea side is chosen. `heightAt`/`trackDistance`/`paintFaces` serve the other layers.
   `TrackMesh.ts` builds the surfaces via `FlatBatch` (heights per vertex): asphalt with rubbered racing line,
-  edge lines, raised kerbs, green verge, gravel/tarmac run-off, start/finish + grid, walls with banners and a
-  line-geometry catch fence (lines stay out of the AO pass), bridge parapets/piers, tyre stacks.
+  edge lines, raised kerbs, start/finish + grid, walls with banners and a mipmapped see-through catch-fence net
+  (no depth write, so out of the AO pass), bridge parapets/piers, tyre stacks. Near-coplanar ground layers get a
+  polygon-offset rank (`BatchMaterial.layer`). On road courses the ground beside the track is `Trackside.ts`: one
+  draped sheet per side whose vertices blend meadow (the terrain's own colour), gravel and tarmac run-off by
+  weight (no stacked patches), run-off on the outside of corners (swelling after the apex, to the real barrier),
+  noisy organic borders, fading into the terrain at its outer edge; it claims its ground in `Occupancy`. Street
+  circuits use the same sheet with a pavement band and escape roads at the top 3 stops. OSM town roads stay out of
+  the terrain corridor levelled to the track and off slopes > 0.3 (terracing there cut jagged cliffs).
   `Kit.ts` loads `public/models/kit.glb` (35 low-poly assets from `_risorse/blender/build_kit.py`, run through
   the Blender MCP; `kit_<name>` roots, `tint*` materials take per-instance colour) and instances them via
   `KitInstancer`. `Scenery3D.ts` (stands with tiers/seat blocks/crowd/roof/flags, pit building + paddock + car
@@ -114,8 +120,8 @@ to draw. Keep these layers decoupled — the sim must never import from `render3
   are carved, `OsmEnvironment` (2 phases: `prepareGround` terraces the terrain under real roads before the
   trackside is built; `populate` after the stands) places kit houses at real buildings, draped roads with
   pavements/centre lines/zebra crossings/lamps, car parks, woods + mapped trees + theme filler groves away from
-  town, harbour boats; `Scenery3D` puts stands at real OSM stands; `TrackMesh` uses real gravel traps when ≥8 are
-  mapped. Without OSM data the procedural `Environment3D` is used. `circuits.json` `cittadino: true` (Monaco) =
+  town, harbour boats; `Scenery3D` puts stands at real OSM stands; `Trackside` paints the real gravel traps when ≥8
+  are mapped. Without OSM data the procedural `Environment3D` is used. `circuits.json` `cittadino: true` (Monaco) =
   street circuit: Armco at the kerb, sidewalks, few tarmac escapes, no elevation exaggeration. All trackside
   dressing (kerb lips, verges/pavements, run-off, barriers, tyre walls) is limited by `TrackMesh.reach`: the
   free room beyond each edge up to the midline toward any other stretch of track and the bend radius on the

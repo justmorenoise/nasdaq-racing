@@ -87,3 +87,36 @@ export function gravelTexture(): Texture {
     { count: 90, r: [0.5, 1.1], color: "#b8a37a", alpha: 0.35 },
   ]);
 }
+
+/**
+ * Catch-fence wire mesh (one diamond per tile, white on transparent). Tiled on
+ * see-through panels: its mipmaps fade the wires to a light haze with distance
+ * instead of the crawling moiré that one-pixel line geometry gives.
+ */
+export function fenceTexture(): Texture {
+  let t = cache.get("fence");
+  if (!t) {
+    const size = 64;
+    const c = document.createElement("canvas");
+    c.width = c.height = size;
+    const ctx = c.getContext("2d")!;
+    ctx.strokeStyle = "#ffffff";
+    ctx.lineWidth = 3;
+    for (const [x0, y0, x1, y1] of [
+      [0, 0, size, size],
+      [size, 0, 0, size],
+      [-size, 0, size, 2 * size],
+      [0, -size, 2 * size, size],
+    ]) {
+      ctx.beginPath();
+      ctx.moveTo(x0, y0);
+      ctx.lineTo(x1, y1);
+      ctx.stroke();
+    }
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, size, 3); // horizontal tension wire
+    t = tiled(new CanvasTexture(c));
+    cache.set("fence", t);
+  }
+  return t;
+}

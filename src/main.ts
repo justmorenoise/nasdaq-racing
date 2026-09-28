@@ -105,6 +105,7 @@ async function boot() {
   loader.times["· terrain mesh"] = Math.round(performance.now() - t0);
   await loader.step(t("loader.surface"), 0.55);
   const trackMesh = new TrackMesh(track, layout, terrain, osm);
+  trackMesh.claimGround(occupancy);
   stage.scene.add(trackMesh.group);
   await loader.step(t("loader.stands"), 0.7);
   const scenery = new Scenery3D(track, layout, terrain, occupancy, osm);
@@ -379,7 +380,9 @@ async function boot() {
     camera.update(dt);
     // Shadows only where the camera looks; off on the tiny mobile thumbnail.
     stage.setShadows(!stageCollapsed);
-    stage.focusShadows(camera.focus.x, camera.focus.y, camera.focus.z, camera.focusRadius);
+    const shade = camera.shadowArea();
+    stage.focusShadows(shade.center.x, shade.center.y, shade.center.z, shade.radius);
+    stage.frame(camera.focusRadius);
     // P1 = best performer by % (top of the standings).
     let leaderSym: string | undefined;
     let bestPct = -Infinity;

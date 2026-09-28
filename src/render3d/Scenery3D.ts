@@ -285,7 +285,8 @@ export class Scenery3D {
     const roofHalf = depth * 0.5;
     g.box(rc.x, rc.y, ax, ay, halfLen + 3, roofHalf, roofY, roofY + 1.4, 0xb7bec7, ROOF);
     const fascia = at(front + depth * 0.42 - roofHalf);
-    g.box(fascia.x, fascia.y, ax, ay, halfLen + 3, 0.6, roofY - 3.2, roofY + 1.4, this.pick(TEAM));
+    // Proud of the roof slab on top and at the ends, never flush with it (z-fighting).
+    g.box(fascia.x, fascia.y, ax, ay, halfLen + 3.3, 0.6, roofY - 3.2, roofY + 1.8, this.pick(TEAM));
     const colLine = at(front + depth * 0.86);
     const bays = Math.max(2, Math.round((halfLen * 2) / 24));
     for (let k = 0; k <= bays; k++) {
@@ -368,10 +369,17 @@ export class Scenery3D {
     if (!tier) return;
 
     const P = (i: number, d: number) => this.edgeOffset(i, side, d + shift(i));
+    // Where the real lane closes in on the track, the pit wall would cut onto the asphalt.
+    const onRoad = (i: number, d: number) => {
+      const p = P(i, d);
+      const lat = ((p.x - s[i].x) * s[i].nx + (p.y - s[i].y) * s[i].ny) * side;
+      return lat < this.track.hw[side > 0 ? 0 : 1][i] + 0.5;
+    };
     const band = (d0: number, d1: number, lift0: number, lift1: number, col: number, topCol = col) => {
       for (let k = 1; k < sub.length; k++) {
         const a = sub[k - 1];
         const b = sub[k];
+        if (onRoad(a, d0) || onRoad(b, d0)) continue;
         const ha = s[a].h;
         const hb = s[b].h;
         g.prism(
@@ -383,7 +391,9 @@ export class Scenery3D {
         );
       }
     };
-    band(laneIn, laneOut, 0.55, 0.55, 0x6d7076, 0x5e6167);
+    // A mapped pit lane is already paved by TrackMesh along its real path: a
+    // second surface here would z-fight it in dark patches.
+    if (!this.track.def.pitLane) band(laneIn, laneOut, 0.55, 0.55, 0x6d7076, 0x5e6167);
     band(laneIn - 1.8, laneIn, 4.5, 4.5, 0xe8e6e0, 0xc8412f); // pit wall
     for (let k = 0; k < sub.length; k += 2) {
       const oc = P(sub[k], tier.depth / 2);
@@ -405,35 +415,53 @@ export class Scenery3D {
         const ha = s[a].h;
         g.prism([P(a, garIn - 0.8), P(b, garIn - 0.8), P(b, garIn), P(a, garIn)], ha, ha + 7.5, TEAM[(k >> 1) % TEAM.length]);
       }
-      band(garIn + 2, garOut - 2, 13, 19, 0xdcdad4, 0x8b929a);
-      band(garIn + 1.5, garIn + 2, 14, 18, 0x2e3a44);
+      // The upper floor starts clear of the block's flat top (13): a roof
+      // rising from exactly that height met it at a grazing angle and z-fought.
+      band(garIn + 2, garOut - 2, 14.2, 19, 0xdcdad4, 0x8b929a);
+      band(garIn + 1.5, garIn + 2, 14.2, 18, 0x2e3a44);
     }
     if (tier.paddock) {
       band(padIn, padOut, 0.4, 0.4, 0x9da1a8, 0xa7abb1);
-      for (let k = 2; k < sub.length - 2; k += 2) {
+      // One vehicle per slot, a fixed distance apart whatever the sample
+      // spacing: transporters (nose out, tail clear of the garages) alternate
+      // with motorhomes or hospitality tents. People and lamps stand in the
+      // gaps, so nothing overlaps (a transporter used to reach into the
+      // garage roof and through the tents).
+      const slot = 26;
+      let acc = 0;
+      let next = slot;
+      let j = 0;
+      for (let k = 1; k < sub.length - 1; k++) {
         const i = sub[k];
+        const a = P(sub[k - 1], padIn);
+        const b = P(i, padIn);
+        acc += Math.hypot(b.x - a.x, b.y - a.y);
+        if (acc < next) continue;
+        next = acc + slot;
         const p = s[i];
-        const ox = side * p.nx;
-        const oy = side * p.ny;
-        const heading = Math.atan2(oy, ox);
-        const team = TEAM[k % TEAM.length];
-        const c1 = P(i, padIn + 14);
-        this.kit.add("truck", c1.x, p.h + 0.4, c1.y, heading, 1, team);
-        if (k % 4 === 0) {
-          const c2 = P(i, padIn + (padOut - padIn) * 0.72);
-          this.kit.add("motorhome", c2.x, p.h + 0.4, c2.y, heading + Math.PI / 2, 1, team);
+        const heading = Math.atan2(side * p.ny, side * p.nx);
+        const team = TEAM[j % TEAM.length];
+        if (j % 2 === 0) {
+          const c = P(i, padIn + 26);
+          this.kit.add("truck", c.x, p.h + 0.4, c.y, heading, 0.8, team);
+        } else if (j % 4 === 1) {
+          const c = P(i, padIn + 22);
+          this.kit.add("motorhome", c.x, p.h + 0.4, c.y, heading, 0.8, team);
         } else {
-          const c2 = P(i, padIn + (padOut - padIn) * 0.7);
-          this.kit.add("tent", c2.x, p.h + 0.4, c2.y, heading, 1.2, team);
+          const c = P(i, padIn + 20);
+          this.kit.add("tent", c.x, p.h + 0.4, c.y, heading, 1.2, team);
         }
-        for (let n = 0; n < 4; n++) {
-          const pp = P(i, padIn + 4 + this.rand() * (padOut - padIn - 8));
-          this.kit.add("person", pp.x + (this.rand() - 0.5) * 10, p.h + 0.4, pp.y + (this.rand() - 0.5) * 10, this.rand() * 6.3, 1, this.pick(TEAM));
+        const tx = Math.cos(p.tangent) * (slot / 2);
+        const ty = Math.sin(p.tangent) * (slot / 2);
+        for (let n = 0; n < 2; n++) {
+          const pp = P(i, padIn + 6 + this.rand() * (padOut - padIn - 12));
+          this.kit.add("person", pp.x + tx, p.h + 0.4, pp.y + ty, this.rand() * 6.3, 1, this.pick(TEAM));
         }
-        if (k % 6 === 0) {
+        if (j % 3 === 0) {
           const lp = P(i, padIn + 2);
-          this.kit.add("lamp", lp.x, p.h + 0.4, lp.y, heading + Math.PI, 1.3);
+          this.kit.add("lamp", lp.x + tx, p.h + 0.4, lp.y + ty, heading + Math.PI, 1.3);
         }
+        j++;
       }
       // Real car parks come from OSM; only invent one without it.
       if (!this.osm) this.carPark(sub, side, padOut + 30);
@@ -518,17 +546,30 @@ export class Scenery3D {
     const s = this.track.samples;
     const straights = [...this.layout.straights].sort((a, b) => this.runLength(b.indices) - this.runLength(a.indices)).slice(0, 3);
     for (const st of straights) {
-      const i = st.indices[Math.floor(st.indices.length * 0.62)];
-      if (this.track.nearSelf[i]) continue;
+      // Clear of the pit lane (a post would stand in it) and of crossings.
+      const i = [0.62, 0.8, 0.45, 0.9, 0.3]
+        .map((f) => st.indices[Math.floor(st.indices.length * f)])
+        .find((i) => !this.track.nearSelf[i] && !this.pit.window.has(i));
+      if (i === undefined) continue;
       const p = s[i];
-      const l = this.edgeOffset(i, 1, 16);
-      const r = this.edgeOffset(i, -1, 16);
+      // From the real asphalt edge (edgeOffset clamps the width, and a wide
+      // pit straight would put a post on the road).
+      const post = (sgn: number) => {
+        const w = this.track.hw[sgn > 0 ? 0 : 1][i] + 16;
+        const x = p.x + p.nx * sgn * w;
+        const y = p.y + p.ny * sgn * w;
+        return { x, y, h: p.h };
+      };
+      const l = post(1);
+      const r = post(-1);
       const span = Math.hypot(l.x - r.x, l.y - r.y);
       for (const e of [l, r]) this.kit.add("gantry_post", e.x, Math.min(e.h, this.ground(e.x, e.y)), e.y, p.tangent, 1.25);
       const beamH = p.h;
-      this.kit.add("gantry_beam", p.x, beamH, p.y, p.tangent, new Vector3(1.25, 1.25, span / PROP_SCALE));
+      const mx = (l.x + r.x) / 2;
+      const my = (l.y + r.y) / 2;
+      this.kit.add("gantry_beam", mx, beamH, my, p.tangent, new Vector3(1.25, 1.25, span / PROP_SCALE));
       for (const u of [-span * 0.22, span * 0.22]) {
-        this.kit.add("sign_panel", p.x + p.nx * u, beamH, p.y + p.ny * u, p.tangent, 1.25);
+        this.kit.add("sign_panel", mx + p.nx * u, beamH, my + p.ny * u, p.tangent, 1.25);
       }
     }
   }

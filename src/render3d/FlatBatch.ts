@@ -25,6 +25,9 @@ export interface BatchMaterial {
   tile?: number;
   /** Draw order among the surface layers (lower first). */
   order?: number;
+  /** Stacking rank among coplanar ground layers: a higher layer wins the depth
+   *  test (polygon offset), so near-coincident surfaces never z-fight. */
+  layer?: number;
 }
 
 const tmp = new Color();
@@ -130,6 +133,11 @@ export class FlatBatch {
         geo.setAttribute("uv", new Float32BufferAttribute(uv, 2));
       }
       geo.computeVertexNormals();
+      if (spec.layer) {
+        spec.material.polygonOffset = true;
+        spec.material.polygonOffsetFactor = -spec.layer;
+        spec.material.polygonOffsetUnits = -spec.layer * 2;
+      }
       const mesh = new Mesh(geo, spec.material);
       mesh.receiveShadow = true;
       mesh.renderOrder = spec.order ?? 0;

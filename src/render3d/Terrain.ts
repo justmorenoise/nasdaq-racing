@@ -102,6 +102,7 @@ export class Terrain {
       runOff: CONFIG.scenery.runOffWidth,
       bounds: { ...track.bounds },
       samples,
+      halfWidth: Float32Array.from({ length: n }, (_, i) => Math.max(track.hw[0][i], track.hw[1][i])),
       length: track.length,
       coast: coast?.segs ?? null,
       seaSign: coast?.sign ?? 1,
@@ -178,6 +179,14 @@ export class Terrain {
 
   get seaInfo() {
     return this.seaSide;
+  }
+
+  /** The colour the ground mesh shows at (x, y) on level ground (meadow, or beach/quay by the sea). */
+  groundColor(x: number, y: number, out: Color): Color {
+    const n = this.noise.at(x / this.colorScale, y / this.colorScale);
+    out.copy(PAL.grassA).lerp(n > 0 ? PAL.grassC : PAL.grassB, Math.abs(n) * 0.9);
+    if (this.water && this.shoreDistance(x, y) > -60) out.copy(this.track.def.street ? PAL.quay : PAL.sand);
+    return out;
   }
 
   /**

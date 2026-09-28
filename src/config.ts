@@ -65,7 +65,7 @@ export const CONFIG = {
   /** Camera. */
   camera: {
     transitionRate: 3.2, // ease rate for pan/zoom (1/seconds)
-    chaseZoom: 4.3, // base zoom in chase mode (slow corners)
+    chaseZoom: 5.0, // base zoom in chase mode (slow corners)
     chaseZoomSpeedSpread: 0.3, // how much speed pulls the zoom out on straights
     fullPadding: 0.08, // fraction padding around track in full view
     fov: 38, // vertical field of view (degrees) at rest
@@ -75,7 +75,7 @@ export const CONFIG = {
     fullYawPeriod: 70, // seconds per orbit drift cycle
     chasePitchSlow: 0.78, // chase tilt in slow corners (radians, ~45°)
     chasePitchFast: 0.6, // chase tilt flat out (lower = more speed)
-    chaseMinDist: 110, // closest the chase camera gets (small screens)
+    chaseMinDist: 95, // closest the chase camera gets (small screens)
     chaseYawRate: 2.2, // how fast the chase camera swings behind the car
     chaseFollowRate: 9, // how tightly the chase camera tracks the car
     lookAhead: 26, // chase target lead ahead of the car (world units)
