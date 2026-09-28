@@ -149,8 +149,10 @@ export function computeField(inp: FieldInput): FieldOutput {
   const b = inp.bounds;
   const span = Math.max(b.maxX - b.minX, b.maxY - b.minY);
   const U = inp.unit;
-  const margin = Math.max(2200 * Math.min(U, 2.5), span * 0.9);
-  const cell = Math.min(40, Math.max(14, span / 220));
+  // Real layouts: ~6 m cells at least and a margin of ~0.7 of the circuit (the
+  // horizon skirt covers beyond); drawn layouts keep their tuned grid.
+  const margin = U > 1 ? Math.max(3000, span * 0.7) : Math.max(2200, span * 0.9);
+  const cell = U > 1 ? Math.min(48, Math.max(6 * U, span / 220)) : Math.min(40, Math.max(14, span / 220));
   const x0 = b.minX - margin;
   const y0 = b.minY - margin;
   const nx = Math.ceil((b.maxX - b.minX + margin * 2) / cell) + 1;
@@ -223,15 +225,22 @@ export function computeField(inp: FieldInput): FieldOutput {
   const roadR = inp.width / 2 + 14;
   const roadR2 = roadR * roadR;
   const L = inp.length;
-  const bucket = new Map<string, number[]>();
+  const bucket = new Map<number, number[]>();
+  const bkey = (i: number, j: number) => (i + 32768) * 65536 + (j + 32768);
   for (let i = 0; i < ns; i++) {
-    const key = `${Math.floor(sx(i) / corridor)},${Math.floor(sy(i) / corridor)}`;
+    const key = bkey(Math.floor(sx(i) / corridor), Math.floor(sy(i) / corridor));
     const l = bucket.get(key) ?? [];
     l.push(i);
     bucket.set(key, l);
   }
+  // Beyond the corridor, a band eased toward the road's level after the fill,
+  // so the ground leaves the road in a smooth slope rather than a staircase of
+  // pinned cells (visible where two roads sit at different heights).
+  const easeBand = cell * 3;
+  const blendW = new Float32Array(N);
+  const blendH = new Float32Array(N);
   for (let k = 0; k < N; k++) {
-    if (dist[k] >= corridor || near[k] < 0) continue;
+    if (dist[k] >= corridor + easeBand || near[k] < 0) continue;
     const i = k % nx;
     const j = (k - i) / nx;
     const x = x0 + i * cell;
@@ -243,7 +252,7 @@ export function computeField(inp: FieldInput): FieldOutput {
     const by = Math.floor(y / corridor);
     for (let a = -1; a <= 1; a++) {
       for (let c = -1; c <= 1; c++) {
-        for (const q of bucket.get(`${bx + a},${by + c}`) ?? []) {
+        for (const q of bucket.get(bkey(bx + a, by + c)) ?? []) {
           const da = Math.abs(sd(q) - sd(own));
           if (Math.min(da, L - da) < corridor * 3) continue;
           const dd = (sx(q) - x) ** 2 + (sy(q) - y) ** 2;
@@ -253,6 +262,11 @@ export function computeField(inp: FieldInput): FieldOutput {
       }
     }
     if (foreignNear && dist[k] > roadR && Math.abs(h - sh(own)) < 0.01) continue;
+    if (dist[k] >= corridor) {
+      blendW[k] = 1 - smooth(corridor, corridor + easeBand, dist[k]);
+      blendH[k] = h - 0.9;
+      continue;
+    }
     hgt[k] = h - 0.9;
     fixed[k] = 1;
   }
@@ -260,6 +274,7 @@ export function computeField(inp: FieldInput): FieldOutput {
   // 3. Harmonic fill of the free nodes: coarse-to-fine SOR (plain SOR on the
   //    full grid needs hundreds of sweeps to carry the corridor's heights out).
   harmonicFill(hgt, fixed, nx, ny);
+  for (let k = 0; k < N; k++) if (blendW[k] > 0) hgt[k] += (blendH[k] - hgt[k]) * blendW[k];
 
   let minH = Infinity;
   for (let i = 0; i < ns; i++) minH = Math.min(minH, sh(i));

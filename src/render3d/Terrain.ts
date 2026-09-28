@@ -2,6 +2,7 @@ import {
   BufferGeometry,
   Color,
   Float32BufferAttribute,
+  Group,
   Mesh,
   MeshLambertMaterial,
   PlaneGeometry,
@@ -35,6 +36,16 @@ const PAL = {
   quay: new Color(0xbdb8ae),
 };
 
+/** Cells per side of a mesh chunk (frustum culling + per-chunk resolution). */
+const CHUNK = 64;
+
+interface Chunk {
+  mesh: Mesh;
+  centers: Float32Array;
+  colors: Float32Array;
+  faces: number;
+}
+
 export interface Water {
   level: number;
   contains(x: number, y: number): boolean;
@@ -48,7 +59,8 @@ export interface Water {
  * `shoreDistance`) for every other layer; `flattenRoads` terraces streets.
  */
 export class Terrain {
-  readonly mesh: Mesh;
+  /** The ground, as chunks the renderer can cull (main view, shadows, AO). */
+  readonly mesh = new Group();
   readonly skirt: Mesh;
   readonly water: Water | null = null;
   readonly corridor: number;
@@ -71,8 +83,8 @@ export class Terrain {
     return 180 * (this.track.def.realGeometry ? UNITS_PER_METRE : 1);
   }
   private noise: ValueNoise;
-  private faceCenters!: Float32Array;
-  private colors!: Float32Array;
+  private chunks: Chunk[] = [];
+  private material = new MeshLambertMaterial({ vertexColors: true, flatShading: true });
 
   /** Build the terrain for a track, computing the heights off the main thread. */
   static async create(track: Track, osm: OsmWorld | null): Promise<Terrain> {
@@ -97,6 +109,7 @@ export class Terrain {
       unit: track.def.realGeometry ? UNITS_PER_METRE : 1,
     };
     let field: FieldOutput;
+    const t0 = performance.now();
     try {
       field = await new Promise<FieldOutput>((resolve, reject) => {
         const w = new Worker(new URL("./terrainWorker.ts", import.meta.url), { type: "module" });
@@ -113,8 +126,12 @@ export class Terrain {
     } catch {
       field = computeField(input);
     }
+    Terrain.fieldMs = Math.round(performance.now() - t0);
     return new Terrain(track, field);
   }
+
+  /** Time the height field took (dev readout). */
+  static fieldMs = 0;
 
   private constructor(
     private track: Track,
@@ -139,10 +156,7 @@ export class Terrain {
     });
     if (f.waterLevel !== null) this.water = { level: f.waterLevel, contains: (x, y) => this.shoreDistance(x, y) > 0 };
     this.noise = terrainNoise(track.def.id);
-    const built = this.buildMesh(this.noise);
-    this.mesh = built.mesh;
-    this.faceCenters = built.centers;
-    this.colors = built.colors;
+    this.mesh.name = "terrain";
     this.skirt = this.buildSkirt();
   }
 
@@ -181,34 +195,81 @@ export class Terrain {
     return this.dist[this.idx(i, j)];
   }
 
-  private buildMesh(noise: ValueNoise): { mesh: Mesh; centers: Float32Array; colors: Float32Array } {
-    const { nx, ny, cell } = this;
-    const tris = (nx - 1) * (ny - 1) * 2;
-    const pos = new Float32Array(tris * 9);
-    const col = new Float32Array(tris * 9);
-    const centers = new Float32Array(tris * 2);
-    const c = new Color();
-    let t = 0;
-    const P = (i: number, j: number) => [this.x0 + i * cell, this.hgt[this.idx(i, j)], this.y0 + j * cell] as const;
+  /**
+   * Coarsest step (cells per quad) at which the chunk stays within `tol` of
+   * the full-resolution surface — flat plains, the sea floor and city blocks
+   * collapse to a few big faces, hills keep their facets. Chunks touching the
+   * track corridor stay at full resolution. `heightAt` always samples the full
+   * grid, so placed objects are off by at most `tol` on coarse chunks.
+   */
+  private chunkStep(i0: number, j0: number, i1: number, j1: number): number {
+    let near = Infinity;
+    for (let j = j0; j <= j1; j++) {
+      for (let i = i0; i <= i1; i++) {
+        const k = this.idx(i, j);
+        if (this.fixedMask[k]) return 1;
+        near = Math.min(near, this.dist[k]);
+      }
+    }
+    const tol = near < this.cell * 40 ? 1.5 : 5;
+    for (const s of [8, 4, 2]) {
+      if ((i1 - i0) % s || (j1 - j0) % s) continue;
+      let ok = true;
+      for (let j = j0; j <= j1 && ok; j++) {
+        for (let i = i0; i <= i1; i++) {
+          const ci = i0 + Math.min(i1 - i0 - s, Math.floor((i - i0) / s) * s);
+          const cj = j0 + Math.min(j1 - j0 - s, Math.floor((j - j0) / s) * s);
+          const tx = (i - ci) / s;
+          const ty = (j - cj) / s;
+          const h00 = this.hgt[this.idx(ci, cj)], h10 = this.hgt[this.idx(ci + s, cj)];
+          const h01 = this.hgt[this.idx(ci, cj + s)], h11 = this.hgt[this.idx(ci + s, cj + s)];
+          const est = h00 * (1 - tx) * (1 - ty) + h10 * tx * (1 - ty) + h01 * (1 - tx) * ty + h11 * tx * ty;
+          if (Math.abs(est - this.hgt[this.idx(i, j)]) > tol) {
+            ok = false;
+            break;
+          }
+        }
+      }
+      if (ok) return s;
+    }
+    return 1;
+  }
+
+  /** (Re)build every chunk mesh from the current heights. */
+  private buildChunks(): void {
+    for (const c of this.chunks) {
+      this.mesh.remove(c.mesh);
+      c.mesh.geometry.dispose();
+    }
+    this.chunks = [];
     let hMax = -Infinity;
     for (const v of this.hgt) hMax = Math.max(hMax, v);
     const snowLine = this.water ? hMax * 0.72 : Infinity;
-    const emit = (a: readonly number[], b: readonly number[], d: readonly number[]) => {
-      // Wind every face counter-clockwise seen from above (front face up).
-      const cross = (d[2] - a[2]) * (b[0] - a[0]) - (d[0] - a[0]) * (b[2] - a[2]);
-      if (cross < 0) [b, d] = [d, b];
-      pos.set([a[0], a[1], a[2], d[0], d[1], d[2], b[0], b[1], b[2]], t * 9);
-      const cx = (a[0] + b[0] + d[0]) / 3;
-      const cy = (a[2] + b[2] + d[2]) / 3;
-      const ch = (a[1] + b[1] + d[1]) / 3;
-      centers[t * 2] = cx;
-      centers[t * 2 + 1] = cy;
-      // Slope from the face normal's vertical component.
-      const ux = d[0] - a[0], uy = d[1] - a[1], uz = d[2] - a[2];
-      const vx = b[0] - a[0], vy = b[1] - a[1], vz = b[2] - a[2];
-      const nxv = uy * vz - uz * vy, nyv = uz * vx - ux * vz, nzv = ux * vy - uy * vx;
-      const up = Math.abs(nyv) / (Math.hypot(nxv, nyv, nzv) || 1);
-      const n = noise.at(cx / this.colorScale, cy / this.colorScale);
+    for (let cj = 0; cj < this.ny - 1; cj += CHUNK) {
+      for (let ci = 0; ci < this.nx - 1; ci += CHUNK) {
+        const i1 = Math.min(ci + CHUNK, this.nx - 1);
+        const j1 = Math.min(cj + CHUNK, this.ny - 1);
+        this.chunks.push(this.buildChunk(ci, cj, i1, j1, this.chunkStep(ci, cj, i1, j1), snowLine));
+      }
+    }
+    for (const c of this.chunks) this.mesh.add(c.mesh);
+  }
+
+  private buildChunk(i0: number, j0: number, i1: number, j1: number, step: number, snowLine: number): Chunk {
+    const { cell } = this;
+    const qi = (i1 - i0) / step;
+    const qj = (j1 - j0) / step;
+    // Faces: the quads, plus a skirt hanging from the chunk's rim that hides the
+    // hairline cracks where a neighbour uses a different step.
+    const faces = qi * qj * 2 + (qi + qj) * 2 * 4;
+    const pos = new Float32Array(faces * 9);
+    const col = new Float32Array(faces * 9);
+    const centers = new Float32Array(faces * 2);
+    const c = new Color();
+    let t = 0;
+    const P = (i: number, j: number) => [this.x0 + i * cell, this.hgt[this.idx(i, j)], this.y0 + j * cell] as const;
+    const shade = (cx: number, cy: number, ch: number, up: number) => {
+      const n = this.noise.at(cx / this.colorScale, cy / this.colorScale);
       c.copy(PAL.grassA).lerp(n > 0 ? PAL.grassC : PAL.grassB, Math.abs(n) * 0.9);
       if (up < 0.93) c.lerp(PAL.forest, 0.4);
       if (up < 0.8) c.lerp(PAL.dirt, 0.6);
@@ -219,13 +280,30 @@ export class Terrain {
         // A town harbour has concrete quays; open coast gets a beach.
         if (s > -60) c.copy(this.track.def.street ? PAL.quay : PAL.sand);
       }
+    };
+    const emit = (a: readonly number[], b: readonly number[], d: readonly number[], skirt = false) => {
+      if (!skirt) {
+        // Wind every face counter-clockwise seen from above (front face up).
+        const cross = (d[2] - a[2]) * (b[0] - a[0]) - (d[0] - a[0]) * (b[2] - a[2]);
+        if (cross < 0) [b, d] = [d, b];
+      }
+      pos.set([a[0], a[1], a[2], d[0], d[1], d[2], b[0], b[1], b[2]], t * 9);
+      const cx = (a[0] + b[0] + d[0]) / 3;
+      const cy = (a[2] + b[2] + d[2]) / 3;
+      centers[t * 2] = cx;
+      centers[t * 2 + 1] = cy;
+      const ux = d[0] - a[0], uy = d[1] - a[1], uz = d[2] - a[2];
+      const vx = b[0] - a[0], vy = b[1] - a[1], vz = b[2] - a[2];
+      const nxv = uy * vz - uz * vy, nyv = uz * vx - ux * vz, nzv = ux * vy - uy * vx;
+      const up = skirt ? 1 : Math.abs(nyv) / (Math.hypot(nxv, nyv, nzv) || 1);
+      shade(cx, cy, (a[1] + b[1] + d[1]) / 3, up);
       for (let v = 0; v < 3; v++) col.set([c.r, c.g, c.b], t * 9 + v * 3);
       t++;
     };
-    for (let j = 0; j < ny - 1; j++) {
-      for (let i = 0; i < nx - 1; i++) {
-        const p00 = P(i, j), p10 = P(i + 1, j), p01 = P(i, j + 1), p11 = P(i + 1, j + 1);
-        if ((i + j) % 2) {
+    for (let j = j0; j < j1; j += step) {
+      for (let i = i0; i < i1; i += step) {
+        const p00 = P(i, j), p10 = P(i + step, j), p01 = P(i, j + step), p11 = P(i + step, j + step);
+        if (((i + j) / step) % 2) {
           emit(p00, p10, p11);
           emit(p00, p11, p01);
         } else {
@@ -234,15 +312,33 @@ export class Terrain {
         }
       }
     }
+    const drop = step > 1 ? 8 : 3;
+    const skirtEdge = (a: readonly number[], b: readonly number[]) => {
+      const a2 = [a[0], a[1] - drop, a[2]];
+      const b2 = [b[0], b[1] - drop, b[2]];
+      // Both windings: the crack may be seen from either side.
+      emit(a, b, b2, true);
+      emit(a, b2, a2, true);
+      emit(a, b2, b, true);
+      emit(a, a2, b2, true);
+    };
+    for (let i = i0; i < i1; i += step) {
+      skirtEdge(P(i, j0), P(i + step, j0));
+      skirtEdge(P(i + step, j1), P(i, j1));
+    }
+    for (let j = j0; j < j1; j += step) {
+      skirtEdge(P(i1, j), P(i1, j + step));
+      skirtEdge(P(i0, j + step), P(i0, j));
+    }
     const geo = new BufferGeometry();
     geo.setAttribute("position", new Float32BufferAttribute(pos, 3));
     geo.setAttribute("color", new Float32BufferAttribute(col, 3));
     geo.computeVertexNormals();
-    const mesh = new Mesh(geo, new MeshLambertMaterial({ vertexColors: true, flatShading: true }));
+    geo.computeBoundingSphere();
+    const mesh = new Mesh(geo, this.material);
     mesh.receiveShadow = true;
     mesh.castShadow = true;
-    mesh.name = "terrain";
-    return { mesh, centers, colors: col };
+    return { mesh, centers, colors: col, faces };
   }
 
   /**
@@ -296,26 +392,25 @@ export class Terrain {
     }
   }
 
-  /** Rebuild the ground mesh after height edits (keeps the same Mesh object). */
-  rebuildMesh(): void {
-    const built = this.buildMesh(this.noise);
-    this.mesh.geometry.dispose();
-    this.mesh.geometry = built.mesh.geometry;
-    this.faceCenters = built.centers;
-    this.colors = built.colors;
+  /** Build (or rebuild, after height edits such as `flattenRoads`) the ground mesh. */
+  buildMesh(): void {
+    this.buildChunks();
   }
 
   /** Recolour ground faces (e.g. city streets): `fn` returns a colour or null to keep. */
   paintFaces(fn: (x: number, y: number) => number | null): void {
     const c = new Color();
-    const n = this.faceCenters.length / 2;
-    for (let t = 0; t < n; t++) {
-      const hex = fn(this.faceCenters[t * 2], this.faceCenters[t * 2 + 1]);
-      if (hex == null) continue;
-      c.setHex(hex);
-      for (let v = 0; v < 3; v++) this.colors.set([c.r, c.g, c.b], t * 9 + v * 3);
+    for (const ch of this.chunks) {
+      let touched = false;
+      for (let t = 0; t < ch.faces; t++) {
+        const hex = fn(ch.centers[t * 2], ch.centers[t * 2 + 1]);
+        if (hex == null) continue;
+        c.setHex(hex);
+        for (let v = 0; v < 3; v++) ch.colors.set([c.r, c.g, c.b], t * 9 + v * 3);
+        touched = true;
+      }
+      if (touched) (ch.mesh.geometry.getAttribute("color") as Float32BufferAttribute).needsUpdate = true;
     }
-    (this.mesh.geometry.getAttribute("color") as Float32BufferAttribute).needsUpdate = true;
   }
 
   /** A huge flat plane at the rim height so the tilted camera never sees the edge. */

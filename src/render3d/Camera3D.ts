@@ -67,6 +67,11 @@ export class Camera3D {
     return this.mode.kind === "full" ? "full" : "chase";
   }
 
+  /** Following a car from behind (not the full view, nor a TV camera). */
+  get chasing(): boolean {
+    return this.mode.kind === "chase" && !this.pinned;
+  }
+
   get followedSymbol(): string | null {
     return this.mode.kind === "full" ? null : this.mode.symbol;
   }

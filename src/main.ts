@@ -1,5 +1,5 @@
 import "./style.css";
-import { Raycaster, Vector2, Vector3 } from "three";
+import { Fog, Raycaster, Vector2, Vector3 } from "three";
 import { buildTrack, TRACKS, resolveTrackParam, trackParamFor } from "./track/tracks";
 import { computeLayout } from "./track/corners";
 import { Stage } from "./render3d/Stage";
@@ -8,6 +8,7 @@ import { Scenery3D } from "./render3d/Scenery3D";
 import { Environment3D } from "./render3d/Environment3D";
 import { OsmEnvironment } from "./render3d/OsmEnvironment";
 import { OsmWorld } from "./render3d/osm";
+import { InstanceCuller } from "./render3d/InstanceCuller";
 import { Terrain } from "./render3d/Terrain";
 import { Occupancy } from "./render3d/Occupancy";
 import { loadKit } from "./render3d/Kit";
@@ -89,11 +90,19 @@ async function boot() {
   // Real surroundings from OpenStreetMap, fitted onto the drawn circuit (null = procedural only).
   const osm = await OsmWorld.load(track);
   await loader.step(t("loader.terrain"), 0.35);
+  let t0 = performance.now();
   const terrain = await Terrain.create(track, osm);
+  loader.times["· terrain field+mesh"] = Math.round(performance.now() - t0);
+  loader.times["· terrain field (worker)"] = Terrain.fieldMs;
   stage.scene.add(terrain.mesh, terrain.skirt);
   const occupancy = new Occupancy();
   const osmEnv = osm ? new OsmEnvironment(track, terrain, occupancy, osm) : null;
+  t0 = performance.now();
   osmEnv?.prepareGround();
+  loader.times["· roads terraced"] = Math.round(performance.now() - t0);
+  t0 = performance.now();
+  terrain.buildMesh();
+  loader.times["· terrain mesh"] = Math.round(performance.now() - t0);
   await loader.step(t("loader.surface"), 0.55);
   const trackMesh = new TrackMesh(track, layout, terrain, osm);
   stage.scene.add(trackMesh.group);
@@ -107,6 +116,8 @@ async function boot() {
   } else {
     stage.scene.add(new Environment3D(track, terrain, occupancy).group);
   }
+  const culler = new InstanceCuller();
+  culler.add(stage.scene);
   await loader.step(t("loader.go"), 1);
 
   // Rubber marks accumulate under the cars at hard-braking corners.
@@ -431,6 +442,17 @@ async function boot() {
         );
     }
     minimap.update(camera.followedSymbol);
+    stage.camera.updateMatrixWorld();
+    culler.update(stage.camera, (stage.scene.fog as Fog).far, 80);
+    // Speed blur at the edges of the chase view, scaled by how fast the car is going.
+    let blur = 0;
+    if (followed && camera.chasing && clk.state === "running") {
+      const { vMin, vMax } = CONFIG.profile;
+      blur = CONFIG.camera.motionBlur * Math.max(0, Math.min(1, (followed.relSpeed - vMin) / (vMax - vMin)));
+      const p = model.poseForCar(followed);
+      tmpV.set(p.x, p.h + 4, p.y);
+    }
+    stage.motionBlur(blur, tmpV, dt);
     stage.render();
 
     // Throttle DOM updates (~7/s) to avoid layout thrash.
@@ -477,6 +499,7 @@ async function boot() {
   let last = performance.now();
   let first = true;
   stage.renderer.setAnimationLoop((now) => {
+    if (!first) stage.adapt((now - last) / 1000);
     frame(Math.min((now - last) / 1000, 0.05));
     last = now;
     if (first) {

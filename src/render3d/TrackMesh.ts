@@ -35,6 +35,8 @@ const VERGE_CORNER = 0x4f8f5c; // painted green strip beyond the kerbs (refs)
 const VERGE_STRAIGHT = 0x7c9b56;
 const SPONSOR = [0x1f3f7a, 0xe6b422, 0xc8412f, 0xf1efe8, 0x23262b, 0x2f7a4f];
 
+const gridKey = (i: number, j: number) => (i + 32768) * 65536 + (j + 32768);
+
 function resampleByDistance(line: Pt3[], step: number): Pt3[] {
   if (line.length < 2) return line.slice();
   const out: Pt3[] = [line[0]];
@@ -77,7 +79,7 @@ export class TrackMesh {
   /** Free room beyond each edge [left, right] per sample: up to the midline
    *  toward any other stretch of track, and the turning radius on the inside. */
   private reach!: [Float32Array, Float32Array];
-  private sGrid = new Map<string, number[]>();
+  private sGrid = new Map<number, number[]>();
   /** Samples inside a tunnel (no trackside dressing there). */
   private covered!: Uint8Array;
   /** Tunnel roof + what stands on it; faded by the app while chasing a car inside. */
@@ -211,7 +213,7 @@ export class TrackMesh {
     let best = Infinity;
     for (let a = -3; a <= 3; a++) {
       for (let b = -3; b <= 3; b++) {
-        for (const j of this.sGrid.get(`${ci + a},${cj + b}`) ?? []) {
+        for (const j of this.sGrid.get(gridKey(ci + a, cj + b)) ?? []) {
           const da = Math.abs(s[j].dist - s[own].dist);
           if (Math.min(da, L - da) < sep) continue;
           const d = Math.hypot(p.x - s[j].x, p.y - s[j].y) - Math.max(this.hw[0][j], this.hw[1][j]);
@@ -231,7 +233,7 @@ export class TrackMesh {
   private computeReach(): void {
     const s = this.track.samples;
     for (let i = 0; i < this.n; i++) {
-      const k = `${Math.floor(s[i].x / 60)},${Math.floor(s[i].y / 60)}`;
+      const k = gridKey(Math.floor(s[i].x / 60), Math.floor(s[i].y / 60));
       const l = this.sGrid.get(k) ?? [];
       l.push(i);
       this.sGrid.set(k, l);

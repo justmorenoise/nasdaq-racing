@@ -16,10 +16,11 @@ import {
 } from "three";
 import { CSS2DRenderer } from "three/examples/jsm/renderers/CSS2DRenderer.js";
 import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
-import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { GTAOPass } from "three/examples/jsm/postprocessing/GTAOPass.js";
 import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
 import { ShaderPass } from "three/examples/jsm/postprocessing/ShaderPass.js";
+import { ScenePass } from "./ScenePass";
+import { MotionBlurPass } from "./MotionBlurPass";
 
 const SKY = 0xcfdde3;
 /** Where the sunlight comes from: a warm late-afternoon sun, low for long shadows. */
@@ -54,14 +55,25 @@ export class Stage {
   readonly camera = new PerspectiveCamera(40, 1, 5, 60000);
   readonly sun = new DirectionalLight(0xffe4c4, 3.1);
   private composer: EffectComposer;
+  private scenePass: ScenePass;
+  private blur: MotionBlurPass;
+  private blurFocus = new Vector2();
+  private blurCam = new Vector3();
   private ao: GTAOPass;
   private aoOn = true;
   width = 1;
   height = 1;
+  /** Device pixel ratio ceiling, and the adaptive ratio currently in use. */
+  private maxRatio = Math.min(window.devicePixelRatio || 1, 1.75);
+  private ratio = this.maxRatio;
+  private frameAvg = 1 / 60;
+  private slowFor = 0;
+  private fastFor = 0;
 
   constructor(private host: HTMLElement) {
-    this.renderer = new WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.75));
+    // No canvas MSAA: the scene pass renders multisampled into its own target.
+    this.renderer = new WebGLRenderer({ antialias: false, powerPreference: "high-performance" });
+    this.renderer.setPixelRatio(this.ratio);
     this.renderer.outputColorSpace = SRGBColorSpace;
     this.renderer.toneMapping = AgXToneMapping;
     this.renderer.toneMappingExposure = 1.15;
@@ -84,14 +96,18 @@ export class Stage {
     this.scene.add(this.sun, this.sun.target);
 
     const size = this.renderer.getDrawingBufferSize(new Vector2());
-    const target = new WebGLRenderTarget(size.x, size.y, { type: HalfFloatType, samples: 4 });
-    this.composer = new EffectComposer(this.renderer, target);
-    this.composer.addPass(new RenderPass(this.scene, this.camera));
+    this.composer = new EffectComposer(this.renderer, new WebGLRenderTarget(size.x, size.y, { type: HalfFloatType, depthBuffer: false }));
+    this.scenePass = new ScenePass(this.scene, this.camera, size.x, size.y);
+    this.composer.addPass(this.scenePass);
     this.ao = new GTAOPass(this.scene, this.camera, size.x, size.y);
+    // AO from the scene pass's depth (normals rebuilt from it): no second scene render.
+    this.ao.setGBuffer(this.scenePass.depth);
     this.ao.blendIntensity = 0.85;
     this.ao.updateGtaoMaterial({ radius: 6, distanceExponent: 1.4, thickness: 3, scale: 1.2, samples: 12 });
     this.ao.updatePdMaterial({ lumaPhi: 10, depthPhi: 2, normalPhi: 3, radius: 6, rings: 2, samples: 12 });
     this.composer.addPass(this.ao);
+    this.blur = new MotionBlurPass(this.scenePass.depth);
+    this.composer.addPass(this.blur);
     this.composer.addPass(new OutputPass());
     this.composer.addPass(new ShaderPass(GradeShader));
 
@@ -104,12 +120,51 @@ export class Stage {
     this.renderer.setSize(this.width, this.height);
     this.composer.setPixelRatio(this.renderer.getPixelRatio());
     this.composer.setSize(this.width, this.height);
+    // AO at half resolution: it is soft by nature, and the denoiser smooths it.
+    const pr = this.renderer.getPixelRatio();
+    this.ao.setSize(Math.round((this.width * pr) / 2), Math.round((this.height * pr) / 2));
     this.labels.setSize(this.width, this.height);
     this.camera.aspect = this.width / this.height;
     this.camera.updateProjectionMatrix();
     // AO is the costly pass: only on roomy views.
     this.aoOn = this.width * this.height > 500 * 400 && this.width >= 640;
     this.ao.enabled = this.aoOn;
+  }
+
+  /**
+   * Dynamic resolution: from the real frame interval, drop the pixel ratio a
+   * step when frames run long for a second, raise it back after a few seconds
+   * of comfortable 60 fps.
+   */
+  adapt(dt: number): void {
+    if (dt > 0.25) return; // tab switch or a load hitch, not a rendering cost
+    this.frameAvg += (dt - this.frameAvg) * 0.1;
+    this.slowFor = this.frameAvg > 1 / 48 ? this.slowFor + dt : 0;
+    this.fastFor = this.frameAvg < 1 / 57 ? this.fastFor + dt : 0;
+    let next = this.ratio;
+    if (this.slowFor > 1) next = Math.max(0.75, this.ratio - 0.15);
+    else if (this.fastFor > 4) next = Math.min(this.maxRatio, this.ratio + 0.15);
+    if (next === this.ratio) return;
+    this.ratio = next;
+    this.slowFor = 0;
+    this.fastFor = 0;
+    this.renderer.setPixelRatio(next);
+    this.resize();
+  }
+
+  /**
+   * Chase-cam motion blur for this frame (call after the camera moved):
+   * `strength` 0 = off, `focus` = the followed car, kept sharp. A camera jump
+   * (a cut, a new car) restarts it instead of smearing across the screen.
+   */
+  motionBlur(strength: number, focus: Vector3, dt: number): void {
+    const cam = this.camera;
+    const pos = new Vector3().setFromMatrixPosition(cam.matrixWorld);
+    if (pos.distanceTo(this.blurCam) > 400) this.blur.reset();
+    this.blurCam.copy(pos);
+    const p = focus.clone().project(cam);
+    this.blurFocus.set(p.x * 0.5 + 0.5, p.y * 0.5 + 0.5);
+    this.blur.setup(cam, strength, this.blurFocus, this.width / this.height, dt);
   }
 
   setShadows(on: boolean): void {

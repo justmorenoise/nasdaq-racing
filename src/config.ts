@@ -83,6 +83,7 @@ export const CONFIG = {
     tvCamOffset: 150, // their distance outside the track edge
     tvCamHeight: 80,
     tvCamRange: 1100, // beyond this the director falls back to the chase cam
+    motionBlur: 1.8, // chase-cam motion blur at top speed (1 = one frame of camera motion; 0 = off)
   },
 
   /** Overtake visuals. */

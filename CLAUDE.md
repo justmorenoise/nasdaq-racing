@@ -76,6 +76,21 @@ to draw. Keep these layers decoupled — the sim must never import from `render3
   gained, counted in `RaceModel.countOvertakes`) and a decaying `momentum` (recent net % move). The model
   exposes `momentumLeaderSymbol()` (the "fastest lap" / hottest climber, distinct from the cumulative
   leader) and `driverOfTheDay()` (most overtakes). These feed the badges below and a future betting layer.
+- **Real layouts (OSM):** circuits with `larghezza_metri` in circuits.json are built from
+  `public/osm/<id>.track.json` (`_risorse/osm/track.py`: OSM `type=circuit` lap, oriented and started at the
+  timing line by a rigid fit of the Fast-F1 lap, plus the real pit lane and official corners) at a uniform
+  `UNITS_PER_METRE` (`track/units.ts`, cars ≈1.35× real) with the real asphalt width; the SVG is only a
+  fallback. Telemetry is anchored on the official corners (`TrackDef.corners`), `computeLayout` uses physical
+  thresholds (turn radius, metres), `OsmWorld` is an identity at that scale, `TrackMesh` puts run-off depth,
+  walls and tyre walls at the real mapped barriers (OSM walls/rails/fences, `bar`), `pitInfo` follows the real
+  pit lane. Slot spacing is in car lengths (`pace.baseGapCars`).
+- **Rendering performance:** terrain in 64-cell chunks, each at the coarsest step within a height tolerance
+  (culling + far fewer triangles; skirts hide cracks; `buildMesh()` once after `prepareGround`);
+  `InstanceCuller` packs only in-frustum instances of every big InstancedMesh each frame; `ScenePass` renders
+  the scene once (MSAA, own depth) and GTAO reuses that depth at half resolution; composer targets are
+  single-sampled; `Stage.adapt` lowers/raises the pixel ratio from the real frame time. `MotionBlurPass`:
+  chase-cam camera-motion blur from depth reprojection, masked to zero around the followed car
+  (`CONFIG.camera.motionBlur`). Dev: `__game.loadTimes` lists per-stage load times.
 - **`render3d/`** — Three.js, low-poly diorama look (refs in `_risorse/ref`). The 2D track plane maps to the
   ground: world (x, y) → Three (x, h, y), Y up (`coords.ts`). **Elevation is real**: `circuits.json`
   `altimetria` (Fast-F1 Z, see the pipeline memory) is placed on the drawn geometry via

@@ -144,7 +144,6 @@ export class OsmEnvironment {
       for (const run of this.runs(mapped, 14)) all.push({ run, w, wm: r.w });
     }
     this.terrain.flattenRoads(all.map((a) => ({ pts: a.run, w: a.w })));
-    this.terrain.rebuildMesh();
     for (const { run, w, wm } of all) {
       {
         const ground = (x: number, y: number) => this.terrain.heightAt(x, y);
@@ -362,10 +361,11 @@ export class OsmEnvironment {
    * dropped on a lawn.
    */
   private pave(): void {
-    const cell = 60;
-    const near = new Map<string, { x: number; y: number; r: number }[]>();
+    const cell = 120;
+    const key = (i: number, j: number) => (i + 32768) * 65536 + (j + 32768);
+    const near = new Map<number, { x: number; y: number; r: number }[]>();
     const add = (x: number, y: number, r: number) => {
-      const k = `${Math.floor(x / cell)},${Math.floor(y / cell)}`;
+      const k = key(Math.floor(x / cell), Math.floor(y / cell));
       const l = near.get(k) ?? [];
       l.push({ x, y, r });
       near.set(k, l);
@@ -382,7 +382,7 @@ export class OsmEnvironment {
       const j = Math.floor(y / cell);
       for (let a = -1; a <= 1; a++) {
         for (let b = -1; b <= 1; b++) {
-          for (const o of near.get(`${i + a},${j + b}`) ?? []) {
+          for (const o of near.get(key(i + a, j + b)) ?? []) {
             if ((o.x - x) ** 2 + (o.y - y) ** 2 < o.r * o.r) return city ? 0xcdc6b7 : 0xb9b6a8;
           }
         }

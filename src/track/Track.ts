@@ -8,6 +8,7 @@ import {
 } from "./telemetry";
 import { catmullRomPolyline, type Pt } from "./centerline";
 import { halfWidths, racingLine } from "./racingLine";
+import { UNITS_PER_METRE } from "./units";
 
 export type TrackTheme = "parco" | "bosco" | "citta" | "porto";
 
@@ -99,10 +100,7 @@ export interface TrackPose {
 /** Real hills read flat at the game's oversized-car scale; exaggerate them a little. */
 const ELEVATION_EXAGGERATION = 1.5;
 
-/** World units per real metre for circuits built from their real layout. The
- *  cars (30 units long) read about 1.35× real size: large enough to follow in
- *  the full view, small enough that the track keeps its real proportions. */
-export const UNITS_PER_METRE = 4;
+export { UNITS_PER_METRE } from "./units";
 
 /** Scale applied to SVG layouts so they sit in the same world scale (~0..1500). */
 export const SVG_SCALE = 3;
