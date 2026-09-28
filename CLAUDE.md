@@ -197,7 +197,11 @@ Implemented with **Supabase** (project ref `nikpcgoswyjylqrusunr`, `nasdaq-grand
 - Edge Function `update-prices` (Deno): reads the **`FINNHUB_API_KEY` secret**, calls Finnhub
   `/quote?symbol=X` per symbol (uses `dp` for daily %, `c` for price), upserts `prices`. **Without the key
   it writes a smooth simulated fallback** so the pipeline works for testing.
-- `pg_cron` job `update-prices-every-minute` invokes the function each minute via `pg_net` (Bearer = anon key).
+- `pg_cron` job `update-prices-every-minute` invokes the function each minute via `pg_net` (Bearer = anon key,
+  plus an `x-cron-secret` header read from the Vault secret `update_prices_cron_secret`; the function checks it
+  through `public.check_cron_secret`, service_role only, and answers 401 otherwise). Invalid Finnhub quotes are
+  skipped, never written as zeros. Source in `supabase/functions/update-prices`, DB setup in `supabase/sql/setup.sql`
+  (deploy the function with the Supabase CLI or MCP; it is not built by Vite).
 - The Finnhub key lives **only** as an Edge Function secret — never in the frontend. The browser uses the
   public anon key. To go live: set the `FINNHUB_API_KEY` secret on the function (Dashboard → Edge Functions
   → secrets), no code change needed.

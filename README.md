@@ -46,10 +46,14 @@ feed (prices) → sim (race model) → render3d (Three.js) + ui (DOM overlay)
 | `src/ui`     | leaderboard, controls, HUD, commentary, minimap                                   |
 | `src/audio`  | engine, tyres, crowd                                                              |
 | `_risorse`   | asset pipelines: OpenStreetMap processing, Blender model builders, audio source   |
+| `supabase`   | live price backend: Edge Function and database setup                             |
 
-Live prices come from a small [Supabase](https://supabase.com) backend (not in this repo): an Edge Function
-polls [Finnhub](https://finnhub.io) every minute and writes a `prices` table the browser follows over Realtime.
-The Finnhub key only ever lives server side.
+Live prices come from a small [Supabase](https://supabase.com) backend: an Edge Function
+([`supabase/functions/update-prices`](supabase/functions/update-prices/index.ts)) polls
+[Finnhub](https://finnhub.io) every minute and writes a `prices` table the browser follows over Realtime.
+The Finnhub key only ever lives server side, as an Edge Function secret, and the function only answers the
+scheduled job, which authenticates with a secret kept in the database Vault.
+[`supabase/sql/setup.sql`](supabase/sql/setup.sql) sets up the table, the job and that secret on a new project.
 
 ## Run it locally
 
